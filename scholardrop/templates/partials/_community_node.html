@@ -1,0 +1,16 @@
+{# One expandable community. `hx-trigger="toggle from:closest details once"` loads
+   the children the first time the disclosure opens -- lazy, and once only. #}
+<li class="tree-node">
+  <details>
+    <summary>
+      <span class="node-name">{{ community.name }}</span>
+      {% if community.handle %}<span class="quiet"> · {{ community.handle }}</span>{% endif %}
+    </summary>
+    <div class="node-children"
+         hx-get="/browse/node/{{ community.uuid }}?depth={{ depth | default(0) }}"
+         hx-trigger="toggle from:closest details once"
+         hx-swap="innerHTML">
+      <p class="quiet">Loading…</p>
+    </div>
+  </details>
+</li>

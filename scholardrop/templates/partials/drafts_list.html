@@ -1,0 +1,36 @@
+{# The drafts themselves. Re-rendered in place after a discard. #}
+{% if drafts %}
+<p class="quiet count">{{ total }} in progress</p>
+<ul class="collection-list">
+  {% for draft in drafts %}
+  <li class="collection" id="draft-{{ draft.id }}">
+    <div>
+      <a class="collection-name" href="/review/{{ draft.id }}">{{ draft.title or 'Untitled draft' }}</a>
+      <div class="quiet">
+        draft {{ draft.id }}
+        {% if draft.collection_name %} · {{ draft.collection_name }}{% endif %}
+        {% if draft.last_modified %} · last changed {{ draft.last_modified }}{% endif %}
+        {% if draft.filenames %} · {{ draft.filenames | join(', ') }}{% else %} · no file attached{% endif %}
+      </div>
+    </div>
+    <div class="draft-actions">
+      <a class="button" href="/review/{{ draft.id }}">Resume</a>
+      <button class="link-button" type="button"
+              hx-get="/drafts/{{ draft.id }}/discard"
+              hx-target="#draft-{{ draft.id }} .draft-actions"
+              hx-swap="innerHTML">Discard</button>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% if has_next %}
+<button class="button quiet-button" hx-get="/drafts/list?page={{ page + 1 }}"
+        hx-target="#drafts-list" hx-swap="innerHTML">Next page</button>
+{% endif %}
+{% if page > 0 %}
+<button class="button quiet-button" hx-get="/drafts/list?page={{ page - 1 }}"
+        hx-target="#drafts-list" hx-swap="innerHTML">Previous page</button>
+{% endif %}
+{% else %}
+<p class="quiet">Nothing in progress. <a href="/browse">Start a submission</a>.</p>
+{% endif %}

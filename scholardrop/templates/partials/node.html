@@ -1,0 +1,35 @@
+{# A community's children. Collections link to /select without verified=1, so the
+   canSubmit gate runs (DESIGN.md §4). #}
+{% if collections %}
+<ul class="collection-list tight">
+  {% for collection in collections %}
+  <li class="collection">
+    <div>
+      <a class="collection-name" href="/select/{{ collection.uuid }}">{{ collection.name }}</a>
+      {% if collection.handle %}<span class="quiet"> · {{ collection.handle }}</span>{% endif %}
+    </div>
+    <a class="button" href="/select/{{ collection.uuid }}">Choose</a>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if subcommunities %}
+<ul class="tree">
+  {% for community in subcommunities %}
+  {% include "partials/_community_node.html" %}
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if not collections and not subcommunities %}
+<p class="quiet">Nothing inside this community.</p>
+{% endif %}
+
+{% if has_next %}
+<button class="button quiet-button"
+        hx-get="/browse/node/{{ uuid }}?page={{ page + 1 }}&depth={{ depth }}"
+        hx-target="closest .node-children" hx-swap="innerHTML">
+  More in this community
+</button>
+{% endif %}

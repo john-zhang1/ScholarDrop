@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Your drafts &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Submissions in progress</h1>
+<p class="lede">
+  Drafts {{ instance.name if instance else 'the repository' }} is holding for
+  {{ signed_in_as or 'you' }} — including any you started in the repository's own
+  interface. Nothing here has been deposited.
+</p>
+
+<div id="drafts-list" hx-get="/drafts/list" hx-trigger="load" hx-swap="innerHTML">
+  <p class="quiet">Loading…</p>
+</div>
+
+<p><a class="quiet" href="/browse">Start a new submission</a></p>
+{% endblock %}

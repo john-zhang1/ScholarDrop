@@ -1,0 +1,16 @@
+{# The dropzone. Posts multipart to /submit and swaps the whole panel, so an
+   error, the progress state and the denial screen all land in the same place. #}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<form class="dropzone" method="post" action="/submit" enctype="multipart/form-data"
+      hx-post="/submit" hx-encoding="multipart/form-data"
+      hx-target="#upload-panel" hx-swap="innerHTML">
+  <label class="dropzone-label" for="file">
+    <span class="dropzone-hint">Drop a PDF here, or choose a file</span>
+    <input id="file" type="file" name="file" accept="application/pdf,.pdf" required>
+  </label>
+  <div class="actions">
+    <button class="button" type="submit">Upload and read</button>
+    <span class="quiet">PDF only{% if max_bytes %}, up to {{ (max_bytes / 1024 / 1024) | round | int }} MB{% endif %}.</span>
+  </div>
+</form>

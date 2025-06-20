@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Sign in to {{ target.name }} &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Sign in to {{ target.name }}</h1>
+<p class="lede">
+  Use your {{ target.name }} account. ScholarDrop passes your password straight to
+  the repository and does not store it.
+</p>
+
+{% if error %}
+<p class="error" role="alert">{{ error }}</p>
+{% endif %}
+
+<form method="post" action="/login/{{ target.key }}" class="stack" autocomplete="on">
+  <label for="user">Username or email</label>
+  <input id="user" name="user" type="text" value="{{ user or '' }}" required autofocus
+         autocomplete="username">
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" required autocomplete="current-password">
+
+  <div class="actions">
+    <button type="submit" class="button">Sign in</button>
+    <a class="quiet" href="/">Choose a different repository</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Review the submission &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Review the submission</h1>
+<p class="lede">
+  This form is the collection's own submission form, read from the repository.
+  Everything is editable, and nothing has been deposited — draft {{ form.workspaceitem_id }}
+  is waiting in the repository until you say so.
+</p>
+
+{# What extraction did or did not manage, stated plainly. #}
+{% if job and job.state == 'running' %}
+<div class="notice" role="status">
+  <p><strong>Still reading the PDF.</strong> Reload this page in a moment to see the
+  suggested values — or start filling the form now, whichever you prefer.</p>
+</div>
+{% elif job and job.state == 'failed' %}
+<div class="notice" role="status">
+  <p><strong>{{ job.error }}</strong> The form below is the collection's form, empty —
+  fill it in yourself and deposit as usual.</p>
+</div>
+{% elif extraction and extraction.tier_used.value == 'none' %}
+<div class="notice" role="status">
+  <p><strong>Nothing could be extracted from this PDF.</strong>
+  {% if extraction.fallback_reason %}<span class="quiet">({{ extraction.fallback_reason }})</span>{% endif %}
+  A scanned or image-only document reads as empty — the form is yours to fill in.</p>
+</div>
+{% elif form.prefilled_count %}
+<div class="notice" role="status">
+  <p>
+    <strong>{{ form.prefilled_count }} field{{ '' if form.prefilled_count == 1 else 's' }} pre-filled
+    from {{ filename or 'the PDF' }}.</strong>
+    Anything marked <span class="badge badge-check">check this</span> was guessed rather than
+    read with confidence — check it before you deposit.
+  </p>
+</div>
+{% endif %}
+
+{% if form.missing_required %}
+<div class="notice notice-missing" role="status">
+  <p>
+    <strong>{{ form.missing_required | length }} required field{{ '' if form.missing_required | length == 1 else 's' }}
+    still to fill in:</strong>
+    {% for field in form.missing_required %}{{ field.config.label }}{{ ', ' if not loop.last }}{% endfor %}.
+  </p>
+</div>
+{% endif %}
+
+{% if deposit_error %}
+<div class="notice notice-missing" role="alert">
+  <p><strong>{{ deposit_error }}</strong></p>
+</div>
+{% endif %}
+
+<form class="submission-form" method="post" action="/review/{{ form.workspaceitem_id }}/confirm">
+  {% for section in form.sections %}
+    {% if section.editable %}
+    <fieldset class="section">
+      <legend>{{ section.heading }}</legend>
+      {% for field in section.primary_fields %}
+        {% include "partials/field.html" %}
+      {% endfor %}
+
+      {% if section.secondary_fields %}
+      <details class="more-fields">
+        <summary>More fields ({{ section.secondary_fields | length }})</summary>
+        {% for field in section.secondary_fields %}
+          {% include "partials/field.html" %}
+        {% endfor %}
+      </details>
+      {% endif %}
+    </fieldset>
+
+    {% elif section.section_type == 'upload' %}
+    <fieldset class="section">
+      <legend>{{ section.heading }}</legend>
+      {% if form.upload_files %}
+      <ul class="plain">
+        {% for file in form.upload_files %}
+        <li><strong>{{ file.name or filename }}</strong>
+          {% if file.sizeBytes %}<span class="quiet">· {{ (file.sizeBytes / 1024 / 1024) | round(1) }} MB</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="quiet">No file is attached to this draft yet.</p>
+      {% endif %}
+    </fieldset>
+
+    {% elif section.section_type == 'license' %}
+    <fieldset class="section">
+      <legend>{{ section.heading }}</legend>
+      {% if form.license_granted %}
+      <p class="quiet">Already granted for this draft.</p>
+      {% endif %}
+      <label class="licence-agree">
+        <input type="checkbox" name="license_granted" value="true"
+               {% if license_checked or form.license_granted %}checked{% endif %}>
+        I grant {{ instance.name if instance else 'the repository' }} the deposit licence below.
+      </label>
+      {% if licence and licence.text %}
+      <details class="licence">
+        <summary>Read the deposit licence</summary>
+        <pre class="licence-text">{{ licence.text }}</pre>
+      </details>
+      {% else %}
+      <p class="quiet">
+        The licence text could not be read from the repository — ask
+        {% if instance and instance.contact_email %}<a href="mailto:{{ instance.contact_email }}">{{ instance.contact_email }}</a>{% else %}your repository administrator{% endif %}
+        for a copy before you agree.
+      </p>
+      {% endif %}
+      {% for message in section.errors %}<p class="error">{{ message }}</p>{% endfor %}
+    </fieldset>
+    {% endif %}
+  {% endfor %}
+
+  <div class="actions">
+    <button class="button" type="submit">Review &amp; submit</button>
+    <span class="quiet">You will see a summary before anything is deposited.</span>
+  </div>
+</form>
+
+{% if form.unplaced %}
+<section class="unplaced">
+  <h2>Found in the PDF, not placed</h2>
+  <p class="quiet">
+    ScholarDrop read these but this collection's form has nowhere to put them. Copy
+    anything useful into a field above; nothing here is deposited on its own.
+  </p>
+  <dl class="unplaced-list">
+    {% for entry in form.unplaced %}
+    <dt>{{ entry.label }} <span class="quiet">— {{ entry.reason }}</span></dt>
+    <dd>
+      {% for value in entry.values %}
+      <span class="chip">{{ value }}</span>
+      {% endfor %}
+    </dd>
+    {% endfor %}
+  </dl>
+</section>
+{% endif %}
+
+<p><a class="quiet" href="/drafts">Your drafts</a> · <a class="quiet" href="/browse">Start another submission</a></p>
+{% endblock %}

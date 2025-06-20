@@ -1,0 +1,21 @@
+{# The repository refused to start a submission here -- the server-side re-check
+   of DESIGN.md §4, rendered inside the upload panel. #}
+<div class="notice">
+  <p>
+    <strong>{{ instance.name if instance else 'The repository' }} would not start a submission
+    in {{ collection_name or 'that collection' }}.</strong>
+  </p>
+  <p class="quiet">
+    Your account does not have submission rights there. Nothing was created, and your
+    file was not kept.
+  </p>
+</div>
+
+<ul class="plain">
+  <li><a href="/browse">Pick one of your own collections</a> — the <em>My collections</em> tab lists everything you may submit to.</li>
+  {% if instance and instance.contact_email %}
+  <li>Need access to this one? Email <a href="mailto:{{ instance.contact_email }}">{{ instance.contact_email }}</a>.</li>
+  {% else %}
+  <li>Need access to this one? Ask the collection's administrator.</li>
+  {% endif %}
+</ul>

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Review &amp; submit &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Ready to deposit</h1>
+<p class="lede">
+  This is what will be sent. Nothing has been written to the repository yet — the
+  values below are still just in this page.
+</p>
+
+{% if form.missing_required %}
+<div class="notice notice-missing" role="alert">
+  <p>
+    <strong>The repository requires
+    {{ form.missing_required | length }} more field{{ '' if form.missing_required | length == 1 else 's' }}:</strong>
+    {% for field in form.missing_required %}{{ field.config.label }}{{ ', ' if not loop.last }}{% endfor %}.
+    Go back and fill {{ 'it' if form.missing_required | length == 1 else 'them' }} in — the deposit
+    will be refused otherwise.
+  </p>
+</div>
+{% endif %}
+
+<dl class="summary">
+  <dt>Collection</dt>
+  <dd>{{ collection_name or 'the collection you chose' }}</dd>
+  <dt>File</dt>
+  <dd>
+    {% if form.upload_files %}
+      {% for file in form.upload_files %}{{ file.name or filename }}{{ ', ' if not loop.last }}{% endfor %}
+    {% else %}{{ filename or 'no file attached' }}{% endif %}
+  </dd>
+  <dt>Deposit licence</dt>
+  <dd>
+    {% if license_checked or form.license_granted %}Granted{% else %}
+    <span class="error">not granted — go back and tick the licence</span>{% endif %}
+  </dd>
+  <dt>Draft</dt>
+  <dd>{{ form.workspaceitem_id }}</dd>
+</dl>
+
+<h2>Metadata</h2>
+{% for section in form.editable_sections %}
+  {% set filled = section.fields | selectattr('filled') | list %}
+  {% if filled %}
+  <dl class="summary metadata-summary">
+    {% for field in filled %}
+    <dt>{{ field.config.label or field.config.metadata_field }}
+      <span class="quiet metadata-field">{{ field.config.metadata_field }}</span></dt>
+    <dd>
+      {% for value in field.values if value.value %}
+      <div class="summary-value">{{ value.value }}</div>
+      {% endfor %}
+    </dd>
+    {% endfor %}
+  </dl>
+  {% endif %}
+{% endfor %}
+
+{# Everything the user typed, carried forward untouched. The deposit route parses
+   these exactly as it parsed the review form -- including the empty input a
+   cleared field needs, without which "I deleted this value" would be lost
+   between the two steps. #}
+<form method="post" action="/review/{{ form.workspaceitem_id }}/deposit" class="confirm-actions">
+  {% for section in form.editable_sections %}
+    {% for field in section.fields %}
+      {% if field.filled %}
+        {% for value in field.values if value.value %}
+      <input type="hidden" name="{{ field.name }}" value="{{ value.value }}">
+        {% endfor %}
+      {% else %}
+      <input type="hidden" name="{{ field.name }}" value="">
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {% if license_checked or form.license_granted %}
+  <input type="hidden" name="license_granted" value="true">
+  {% endif %}
+  <div class="actions">
+    <button class="button" type="submit">Deposit</button>
+    <button class="link-button" type="submit" formaction="/review/{{ form.workspaceitem_id }}/edit">
+      Back to editing
+    </button>
+  </div>
+  <p class="quiet">
+    Depositing hands the submission to the collection's workflow. Depending on the
+    collection, it will either wait for a reviewer or be archived straight away.
+  </p>
+</form>
+{% endblock %}

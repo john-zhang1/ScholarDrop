@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Choose a repository &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Choose a repository</h1>
+<p class="lede">
+  Sign in with your repository credentials, pick a collection you may submit to,
+  and upload a PDF. ScholarDrop fills in what it can; you review and approve
+  everything before anything is deposited.
+</p>
+
+<ul class="instance-list">
+  {% for instance in instances %}
+  <li class="instance">
+    <div class="instance-body">
+      <h2>{{ instance.name }}</h2>
+      <p class="instance-url">{{ instance.base_url }}</p>
+    </div>
+    <a class="button" href="/login/{{ instance.key }}">Sign in</a>
+  </li>
+  {% endfor %}
+</ul>
+{% endblock %}

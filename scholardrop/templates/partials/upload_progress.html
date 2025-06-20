@@ -1,0 +1,13 @@
+{# Polls until extraction finishes; the poll answers with HX-Redirect to /review. #}
+<div class="progress" role="status" aria-live="polite"
+     hx-get="/submit/status/{{ wsi_id }}"
+     hx-trigger="load delay:800ms"
+     hx-target="#upload-panel"
+     hx-swap="innerHTML">
+  <p><strong>Reading {{ filename or 'your PDF' }}…</strong></p>
+  <p class="quiet">
+    The file is already attached to draft {{ wsi_id }} in the repository. Extraction
+    is running — this usually takes a few seconds. Nothing is deposited yet.
+  </p>
+  <p class="quiet"><a href="/review/{{ wsi_id }}">Skip and go to the form</a></p>
+</div>

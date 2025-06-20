@@ -1,0 +1,16 @@
+# Repository registry (DESIGN.md §2).
+#
+# Adding a second DSpace instance is one more block here, plus a mapping
+# profile under config/mappings/ if its metadata field names differ.
+#
+# base_url is the DSpace *server* root -- ScholarDrop appends /api itself.
+
+instances:
+  shareok:
+    name: SHAREOK
+    base_url: https://shareok.org/server
+    mapping_profile: shareok-etd
+    # Shown on the access-denied screen so a user knows who to ask (DESIGN.md §4).
+    contact_email: shareok@ou.edu
+    # llm | heuristic -- per-instance extraction tier (DESIGN.md §5).
+    extraction: llm

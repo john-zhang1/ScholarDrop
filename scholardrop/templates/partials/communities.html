@@ -1,0 +1,30 @@
+{# "Browse all" tab: top-level communities. Each node's children load on first
+   expand -- a <details> element, so it works without any custom JavaScript. #}
+<div class="panel">
+  <p class="quiet">
+    The full community tree. Choosing a collection here checks your submission rights first.
+  </p>
+  {% if communities %}
+  <ul class="tree">
+    {% for community in communities %}
+    {% include "partials/_community_node.html" %}
+    {% endfor %}
+  </ul>
+  {% if has_next %}
+  <button class="button quiet-button"
+          hx-get="/browse/all?page={{ page + 1 }}"
+          hx-target="#tab-panel" hx-swap="innerHTML">
+    Next page
+  </button>
+  {% endif %}
+  {% if page > 0 %}
+  <button class="button quiet-button"
+          hx-get="/browse/all?page={{ page - 1 }}"
+          hx-target="#tab-panel" hx-swap="innerHTML">
+    Previous page
+  </button>
+  {% endif %}
+  {% else %}
+  <p class="quiet">This repository has no communities to browse.</p>
+  {% endif %}
+</div>

@@ -1,0 +1,35 @@
+{# One input for one value of one field. Also returned on its own by
+   /review/{id}/row when a repeatable field gains a row. Expects `field`,
+   `value`, and `row_index` (only the first row carries the id the label
+   points at). #}
+{% set row_index = row_index | default(0) %}
+<div class="field-row">
+  {% if field.config.is_choice and field.options %}
+  <select {% if row_index == 0 %}id="{{ field.dom_id }}"{% endif %} name="{{ field.name }}">
+    <option value="">— choose —</option>
+    {% for option in field.options %}
+    <option value="{{ option.value }}"{% if option.value == value.value %} selected{% endif %}>{{ option.display }}</option>
+    {% endfor %}
+    {% if value.value and value.value not in field.options | map(attribute='value') | list %}
+    <option value="{{ value.value }}" selected>{{ value.value }} (not in this list)</option>
+    {% endif %}
+  </select>
+  {% elif field.config.multiline %}
+  <textarea {% if row_index == 0 %}id="{{ field.dom_id }}"{% endif %} name="{{ field.name }}" rows="6">{{ value.value }}</textarea>
+  {% else %}
+  <input type="text" {% if row_index == 0 %}id="{{ field.dom_id }}"{% endif %} name="{{ field.name }}"
+         value="{{ value.value }}"
+         {% if field.config.input_type == 'date' %}placeholder="YYYY-MM-DD"{% endif %}>
+  {% endif %}
+
+  {% if value.low_confidence and value.value %}
+  <span class="badge badge-check" title="A heuristic guessed this — read it before you deposit.">check this</span>
+  {% elif value.prefilled %}
+  <span class="badge">from the PDF</span>
+  {% endif %}
+
+  {% if field.config.repeatable %}
+  <button type="button" class="link-button row-remove"
+          hx-on:click="this.closest('.field-row').remove()">Remove</button>
+  {% endif %}
+</div>

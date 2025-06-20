@@ -1,0 +1,147 @@
+"""Server-side sessions.
+
+The browser only ever holds a signed, HttpOnly cookie containing an opaque
+session id. Everything sensitive -- the DSpace JWT, the CSRF token -- lives in
+this process, keyed by that id (DESIGN.md §2, §8).
+
+SessionStore is the seam: swapping InMemorySessionStore for a Redis-backed
+implementation is the only change needed to run multi-worker.
+"""
+
+from __future__ import annotations
+
+import secrets
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+from itsdangerous import BadSignature, URLSafeSerializer
+
+
+@dataclass
+class Session:
+    """Server-side state for one signed-in browser."""
+
+    id: str
+    created_at: float
+    last_seen: float
+    instance_key: str | None = None
+    # Set once the user authenticates. Never leaves the process (DESIGN.md §8).
+    jwt: str | None = None
+    xsrf_token: str | None = None
+    eperson_name: str | None = None
+    eperson_uuid: str | None = None
+    collection_uuid: str | None = None
+    workspaceitem_id: str | None = None
+    # Scratch space for phase-specific state (upload paths, extraction results).
+    data: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def authenticated(self) -> bool:
+        return self.jwt is not None
+
+    def expires_at(self, ttl_seconds: int) -> float:
+        return self.last_seen + ttl_seconds
+
+    def is_expired(self, ttl_seconds: int, now: float | None = None) -> bool:
+        return (now if now is not None else time.monotonic()) >= self.expires_at(ttl_seconds)
+
+
+class SessionStore(ABC):
+    """Create / fetch / drop sessions, with idle expiry.
+
+    `ttl_seconds` is an *idle* timeout: get() refreshes last_seen, so an active
+    user is never logged out mid-flow, and an abandoned tab expires on schedule.
+    """
+
+    def __init__(self, ttl_seconds: int) -> None:
+        self.ttl_seconds = ttl_seconds
+
+    @abstractmethod
+    def create(self, **initial: Any) -> Session: ...
+
+    @abstractmethod
+    def get(self, session_id: str, *, touch: bool = True) -> Session | None: ...
+
+    @abstractmethod
+    def save(self, session: Session) -> None: ...
+
+    @abstractmethod
+    def delete(self, session_id: str) -> None: ...
+
+    @abstractmethod
+    def sweep(self) -> int:
+        """Drop every expired session. Returns how many were removed."""
+
+    @abstractmethod
+    def __len__(self) -> int: ...
+
+
+class InMemorySessionStore(SessionStore):
+    """Single-process dict store. Fine for v1 (one uvicorn worker)."""
+
+    def __init__(self, ttl_seconds: int, *, clock: Any = time.monotonic) -> None:
+        super().__init__(ttl_seconds)
+        self._sessions: dict[str, Session] = {}
+        self._clock = clock
+
+    def create(self, **initial: Any) -> Session:
+        now = self._clock()
+        session = Session(id=secrets.token_urlsafe(32), created_at=now, last_seen=now, **initial)
+        self._sessions[session.id] = session
+        return session
+
+    def get(self, session_id: str, *, touch: bool = True) -> Session | None:
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        now = self._clock()
+        if session.is_expired(self.ttl_seconds, now):
+            del self._sessions[session_id]
+            return None
+        if touch:
+            session.last_seen = now
+        return session
+
+    def save(self, session: Session) -> None:
+        # In-memory sessions are mutated in place; save() exists so callers write
+        # code that also works against a Redis store.
+        self._sessions[session.id] = session
+
+    def delete(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+
+    def sweep(self) -> int:
+        now = self._clock()
+        expired = [sid for sid, s in self._sessions.items() if s.is_expired(self.ttl_seconds, now)]
+        for sid in expired:
+            del self._sessions[sid]
+        return len(expired)
+
+    def __len__(self) -> int:
+        return len(self._sessions)
+
+
+class SessionCookie:
+    """Signs and verifies the session id carried in the cookie."""
+
+    def __init__(
+        self, secret_key: str, *, name: str, secure: bool, salt: str = "scholardrop"
+    ) -> None:
+        self.name = name
+        self.secure = secure
+        self._serializer = URLSafeSerializer(secret_key, salt=salt)
+
+    def dumps(self, session_id: str) -> str:
+        return self._serializer.dumps(session_id)
+
+    def loads(self, raw: str | None) -> str | None:
+        """Session id from a cookie value, or None if absent or tampered with."""
+        if not raw:
+            return None
+        try:
+            value = self._serializer.loads(raw)
+        except BadSignature:
+            return None
+        return value if isinstance(value, str) else None

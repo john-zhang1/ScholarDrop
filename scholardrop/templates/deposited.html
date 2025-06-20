@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Submitted &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+{% if result.entered_workflow %}
+<h1>Submitted for review</h1>
+<div class="notice">
+  <p>
+    <strong>Your submission is with
+    {{ collection_name or "the collection's" }} reviewers.</strong>
+    It will appear in the repository once they approve it; if they send it back, it
+    returns to your drafts.
+  </p>
+  {% if result.workflow_item %}
+  <p class="quiet">Workflow reference: {{ result.workflow_item.id }}</p>
+  {% endif %}
+</div>
+{% else %}
+<h1>Deposited</h1>
+<div class="notice">
+  <p>
+    <strong>Your submission is in the repository.</strong>
+    {{ collection_name or 'This collection' }} archives directly, so there was no
+    review step.
+  </p>
+  {% if archived_item and archived_item.handle %}
+  <p>
+    Permanent link:
+    <a href="https://hdl.handle.net/{{ archived_item.handle }}">hdl.handle.net/{{ archived_item.handle }}</a>
+  </p>
+  {% elif archived_item %}
+  <p class="quiet">Item {{ archived_item.uuid }} — its permanent link appears once the
+  repository has minted the handle.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<p class="lede">
+  The file and the metadata you approved were sent exactly as shown. Nothing else
+  was changed.
+</p>
+
+<div class="actions">
+  <a class="button" href="/browse">Submit another</a>
+  <a class="quiet" href="/drafts">Your drafts</a>
+</div>
+{% endblock %}

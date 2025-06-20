@@ -1,0 +1,40 @@
+{# Result rows only. These entries came from findSubmitAuthorized, so the link
+   carries verified=1 and /select skips the redundant canSubmit call. #}
+{% if collections %}
+<p class="quiet count">{{ total }} collection{{ '' if total == 1 else 's' }}{% if q %} matching “{{ q }}”{% endif %}</p>
+<ul class="collection-list">
+  {% for collection in collections %}
+  <li class="collection">
+    <div>
+      <a class="collection-name" href="/select/{{ collection.uuid }}?verified=1">{{ collection.name }}</a>
+      {% if collection.handle %}<span class="quiet"> · {{ collection.handle }}</span>{% endif %}
+    </div>
+    <a class="button" href="/select/{{ collection.uuid }}?verified=1">Choose</a>
+  </li>
+  {% endfor %}
+</ul>
+{% if has_next %}
+<button class="button quiet-button"
+        hx-get="/browse/mine/results?q={{ q or '' }}&page={{ page + 1 }}"
+        hx-target="#mine-results" hx-swap="innerHTML">
+  Next page
+</button>
+{% endif %}
+{% if page > 0 %}
+<button class="button quiet-button"
+        hx-get="/browse/mine/results?q={{ q or '' }}&page={{ page - 1 }}"
+        hx-target="#mine-results" hx-swap="innerHTML">
+  Previous page
+</button>
+{% endif %}
+{% elif q %}
+<p class="quiet">Nothing matches “{{ q }}”.</p>
+{% else %}
+<p class="quiet">
+  {{ instance.name if instance else 'The repository' }} does not list any collections you may
+  submit to. Try <em>Browse all</em>, or ask
+  {% if instance and instance.contact_email %}
+  <a href="mailto:{{ instance.contact_email }}">{{ instance.contact_email }}</a>
+  {% else %}your repository administrator{% endif %} for submission rights.
+</p>
+{% endif %}

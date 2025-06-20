@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ScholarDrop{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  <script src="{{ url_for('static', path='/htmx.min.js') }}" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">ScholarDrop</a>
+    <span class="tagline">Drop a PDF. Deposit a publication.</span>
+    {% if signed_in_as %}
+    <div class="whoami">
+      <span>{{ signed_in_as }}{% if instance %} at {{ instance.name }}{% endif %}</span>
+      <a href="/drafts">Drafts</a>
+      <form method="post" action="/logout">
+        <button type="submit" class="link-button">Sign out</button>
+      </form>
+    </div>
+    {% endif %}
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <span>ScholarDrop {{ request.app.version }}</span>
+  </footer>
+</body>
+</html>

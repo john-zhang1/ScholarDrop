@@ -1,0 +1,70 @@
+UNIVERSITY OF OKLAHOMA
+
+GRADUATE COLLEGE
+
+
+SEDIMENT TRANSPORT IN EPHEMERAL PRAIRIE STREAMS:
+A MULTI-SCALE ASSESSMENT
+
+
+A DISSERTATION
+
+SUBMITTED TO THE GRADUATE FACULTY
+
+in partial fulfillment of the requirements for the
+
+Degree of Doctor of Philosophy
+
+
+By
+
+MARGARET OKONKWO-BELL
+Norman, Oklahoma
+2019
+
+
+SEDIMENT TRANSPORT IN EPHEMERAL PRAIRIE STREAMS:
+A MULTI-SCALE ASSESSMENT
+
+A DISSERTATION APPROVED FOR THE
+SCHOOL OF GEOSCIENCES
+
+
+BY THE COMMITTEE CONSISTING OF
+
+
+Dr. Helen Vasquez, Chair
+Dr. Samuel Adeyemi
+Dr. Priya Raghunathan
+Dr. Thomas Lindqvist
+Dr. Anne-Marie Cloutier
+
+
+© Copyright by MARGARET OKONKWO-BELL 2019
+All Rights Reserved.
+
+
+Abstract
+
+Ephemeral streams across the southern Great Plains move a disproportionate share of
+regional sediment during brief, high-magnitude flow events, yet their transport
+behaviour remains poorly constrained relative to perennial systems. This dissertation
+combines three years of field monitoring at eleven gauged reaches with flume
+experiments and a reach-scale numerical model to quantify how antecedent moisture,
+vegetation density, and channel geometry jointly govern bedload flux. Field records
+show that 68% of annual sediment yield occurs in fewer than nine hours of flow, and
+that transport efficiency declines sharply where riparian grass cover exceeds forty
+percent. Flume results reproduce this threshold and identify near-bed turbulence
+suppression as the controlling mechanism. Incorporating the resulting parameterisation
+into a one-dimensional model reduces predicted yield error from 41% to 12% across the
+validation reaches. These findings suggest that regional sediment budgets built on
+perennial-stream relationships systematically overestimate ephemeral contributions,
+with implications for reservoir siltation forecasting and conservation practice siting
+throughout the region.
+
+Keywords: fluvial geomorphology; sediment transport; ephemeral streams; Great Plains;
+bedload; riparian vegetation
+
+Table of Contents
+
+Chapter 1: Introduction .................................................... 1

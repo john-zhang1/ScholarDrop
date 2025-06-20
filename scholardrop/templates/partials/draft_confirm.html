@@ -1,0 +1,11 @@
+{# Discarding deletes the draft and its file in the repository, so it is asked
+   for twice. Swaps back over the row's actions. #}
+<span class="quiet">Discard permanently?</span>
+<button class="button danger" type="button"
+        hx-post="/drafts/{{ wsi_id }}/discard"
+        hx-target="#drafts-list"
+        hx-swap="innerHTML">Discard</button>
+<button class="link-button" type="button"
+        hx-get="/drafts/list"
+        hx-target="#drafts-list"
+        hx-swap="innerHTML">Keep</button>

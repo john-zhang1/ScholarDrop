@@ -1,0 +1,20 @@
+{# "My collections" tab: search box + a separately-swapped result list. #}
+<div class="panel">
+  <p class="quiet">
+    Collections {{ instance.name if instance else 'the repository' }} says you may submit to.
+  </p>
+
+  <label class="visually-hidden" for="collection-search">Search your collections</label>
+  <input id="collection-search" class="search" type="search" name="q" value="{{ q or '' }}"
+         placeholder="Search by name…"
+         hx-get="/browse/mine/results"
+         hx-target="#mine-results"
+         hx-swap="innerHTML"
+         hx-trigger="keyup changed delay:300ms, search"
+         hx-indicator="#mine-spinner">
+  <span id="mine-spinner" class="htmx-indicator quiet">searching…</span>
+
+  <div id="mine-results" hx-get="/browse/mine/results?q={{ q or '' }}" hx-trigger="load">
+    <p class="quiet">Loading…</p>
+  </div>
+</div>

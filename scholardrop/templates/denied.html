@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Access denied &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>You cannot submit to this collection</h1>
+
+<div class="notice">
+  <p>
+    {{ instance.name if instance else 'The repository' }} does not grant
+    {{ signed_in_as or 'your account' }} permission to submit to
+    <strong>{{ collection.name }}</strong>{% if collection.handle %} ({{ collection.handle }}){% endif %}.
+  </p>
+  <p class="quiet">
+    Submission rights live in the repository, not in ScholarDrop — so this has to be
+    granted there before you can deposit here.
+  </p>
+</div>
+
+<h2>What to do</h2>
+<ul class="plain">
+  <li><a href="/browse">Pick one of your own collections</a> — the <em>My collections</em> tab lists everything you may submit to.</li>
+  <li>
+    Need access to this one? Ask the collection's administrator
+    {% if instance and instance.contact_email %}
+    or email <a href="mailto:{{ instance.contact_email }}?subject=Submission%20rights%20for%20{{ collection.name | urlencode }}">{{ instance.contact_email }}</a>
+    {% endif %}.
+  </li>
+</ul>
+
+<p><a class="button" href="/browse">Back to collections</a></p>
+{% endblock %}

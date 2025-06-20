@@ -1,0 +1,16 @@
+# Mapping profile: neutral extracted field name -> DSpace metadata field.
+#
+# The extractor knows nothing about Dublin Core (DESIGN.md §5); this file is the
+# only place SHAREOK's field names appear. If the ETD collections turn out to use
+# thesis.degree.* or similar, only this file changes.
+#
+# Keys must be names the extractor emits (see EXTRACTED_FIELDS in
+# scholardrop/config.py). Values must be schema.element[.qualifier].
+
+title:             dc.title
+authors:           dc.contributor.author
+advisor:           dc.contributor.advisor
+committee_members: dc.contributor.committeeMember
+keywords:          dc.subject
+abstract:          dc.description.abstract
+date_issued:       dc.date.issued

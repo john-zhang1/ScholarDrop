@@ -1,0 +1,29 @@
+Journal of Hydrological Modelling
+Volume 41, Issue 3, pages 220-238
+Received 14 January 2023; accepted 2 May 2023
+
+Rainfall-runoff prediction in small ungauged catchments using regionalised
+recession parameters
+
+Priya Raghunathan, Aaron Whitfield, and Lucia Ferrari
+
+Department of Civil Engineering and Environmental Science, University of Oklahoma,
+Norman, Oklahoma, United States
+
+Abstract
+Predicting runoff in ungauged catchments remains a central problem in operational
+hydrology. We evaluate whether recession parameters regionalised from 84 gauged
+catchments transfer to small ungauged basins in the south-central United States. Using
+a leave-one-out framework, we find that regionalised parameters reproduce observed
+peak flows within 18% for catchments below 50 square kilometres, but degrade markedly
+where karst features are present. A simple screening test based on baseflow index
+identifies the affected catchments in advance, improving median Nash-Sutcliffe
+efficiency from 0.44 to 0.71 across the transfer set. The approach requires no
+additional instrumentation and can be applied with nationally available datasets.
+
+Keywords: ungauged catchments, recession analysis, regionalisation, karst hydrology
+
+1. Introduction
+
+Operational flood forecasting in small catchments is routinely constrained by the
+absence of streamflow records.

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Choose a collection &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Choose a collection</h1>
+<p class="lede">Pick where this publication belongs. You can change nothing yet — the next step is the file.</p>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" class="tab {% if tab == 'mine' %}is-active{% endif %}"
+          hx-get="/browse/mine" hx-target="#tab-panel" hx-swap="innerHTML"
+          hx-on:click="document.querySelectorAll('.tab').forEach(t => t.classList.remove('is-active')); this.classList.add('is-active')">
+    My collections
+  </button>
+  <button role="tab" class="tab {% if tab == 'all' %}is-active{% endif %}"
+          hx-get="/browse/all" hx-target="#tab-panel" hx-swap="innerHTML"
+          hx-on:click="document.querySelectorAll('.tab').forEach(t => t.classList.remove('is-active')); this.classList.add('is-active')">
+    Browse all
+  </button>
+</nav>
+
+<div id="tab-panel"
+     hx-get="{% if tab == 'all' %}/browse/all{% else %}/browse/mine{% endif %}"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <p class="quiet">Loading…</p>
+</div>
+
+<noscript>
+  <p class="error">
+    This page needs JavaScript for the collection browser. Ask your repository
+    administrator for the collection you should use, then return here.
+  </p>
+</noscript>
+{% endblock %}
