@@ -21,6 +21,7 @@ from scholardrop.dspace import (
     DSpaceNotFound,
     DSpaceUnavailable,
 )
+from scholardrop.extract import llm
 from scholardrop.ratelimit import RateLimiter
 from scholardrop.request_log import RequestContextMiddleware, configure_logging
 from scholardrop.routes import auth, browse, drafts, home, review, submit
@@ -224,13 +225,45 @@ def _install_error_handlers(app: FastAPI) -> None:
 
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    sweeper = asyncio.create_task(_sweep(app))
+    background = [asyncio.create_task(_sweep(app))]
+    if _should_warm_extraction(app):
+        background.append(asyncio.create_task(_warm_extraction(app)))
     try:
         yield
     finally:
-        sweeper.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sweeper
+        for task in background:
+            task.cancel()
+        for task in background:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+def _should_warm_extraction(app: FastAPI) -> bool:
+    """Only worth a request if tier 1 can actually run for someone."""
+    settings: Settings = app.state.settings
+    registry: Registry = app.state.registry
+    return bool(
+        settings.extraction_warm_on_startup
+        and settings.anthropic_api_key
+        and any(instance.extraction == "llm" for instance in registry.instances.values())
+    )
+
+
+async def _warm_extraction(app: FastAPI) -> None:
+    """Pay for the output schema's grammar compile before a submission has to.
+
+    Runs alongside startup rather than blocking it: the app serves requests while
+    this is in flight, and a failure costs nothing beyond a log line -- the first
+    real extraction just pays the cold cost itself, as it did before.
+    """
+    try:
+        await llm.warm_grammar(app.state.settings)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # a warm-up must never take the app down
+        log.info("extraction warm-up did not complete (%s: %s)", type(exc).__name__, exc)
+    else:
+        log.info("extraction warm-up complete; tier 1 grammar is compiled")
 
 
 async def _sweep(app: FastAPI) -> None:

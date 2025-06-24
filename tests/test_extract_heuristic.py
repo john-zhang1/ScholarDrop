@@ -14,7 +14,7 @@ import pytest
 
 from scholardrop.extract import heuristic
 from scholardrop.extract.models import LOW_CONFIDENCE, SourceTier
-from scholardrop.extract.reader import PdfDocument
+from scholardrop.extract.reader import PdfDocument, TextBlock
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -364,6 +364,81 @@ def test_title_from_largest_block_ignoring_boilerplate() -> None:
 
 def test_no_blocks_and_no_metadata_means_no_title() -> None:
     assert heuristic.extract(PdfDocument(page_count=1)).title.present is False
+
+
+# The real page-1 layout of Xu_oklahoma_2409A_10865.pdf: a Word-typeset ETD title
+# page, every block 12pt, the title wrapped over two lines. Before this, tier 2
+# returned "GRADUATE COLLEGE" at 0.30 confidence and it was deposited.
+def _uniform_etd_title_page() -> list[TextBlock]:
+    lines = [
+        ("UNIVERSITY OF OKLAHOMA", 108.49),
+        ("GRADUATE COLLEGE", 136.09),
+        ("DETECTION, DISTRIBUTIONS, AND BIOGEOCHEMICAL IMPLICATIONS OF", 242.92),
+        ("FOSSIL ARSENOLIPIDS IN MARINE AND LACUSTRINE SEDIMENTS", 270.52),
+        ("A DISSERTATION", 358.12),
+        ("SUBMITTED TO THE GRADUATE FACULTY", 385.72),
+        ("in partial fulfillment of the requirements for the", 413.34),
+        ("Degree of", 440.94),
+        ("DOCTOR OF PHILOSOPHY", 468.54),
+        ("By", 609.81),
+        ("CHENXI XU", 637.29),
+        ("Norman, Oklahoma", 664.89),
+        ("2026", 692.48),
+    ]
+    return [TextBlock(text=text, max_size=12.0, top=top) for text, top in lines]
+
+
+def test_wrapped_title_on_a_uniform_font_page_is_read_whole() -> None:
+    document = PdfDocument(
+        page_count=151, front_text="body", first_page_blocks=_uniform_etd_title_page()
+    )
+
+    title = heuristic.extract(document).title
+
+    assert title.value == (
+        "DETECTION, DISTRIBUTIONS, AND BIOGEOCHEMICAL IMPLICATIONS OF "
+        "FOSSIL ARSENOLIPIDS IN MARINE AND LACUSTRINE SEDIMENTS"
+    )
+    # Nothing about the layout confirmed this, so the reviewer still gets a flag.
+    assert title.low_confidence is True
+
+
+def test_letterhead_is_never_the_title() -> None:
+    document = PdfDocument(
+        page_count=151, front_text="body", first_page_blocks=_uniform_etd_title_page()
+    )
+
+    assert "GRADUATE COLLEGE" not in (heuristic.extract(document).title.value or "")
+
+
+def test_uniform_page_with_rival_candidates_declines_rather_than_guessing() -> None:
+    """No size hierarchy and more than one survivor is a coin toss, not a title."""
+    document = PdfDocument(
+        page_count=5,
+        front_text="body",
+        first_page_blocks=[
+            TextBlock(text="Some Plausible Heading Here", max_size=12.0, top=100.0),
+            TextBlock(text="Another Plausible Heading", max_size=12.0, top=300.0),
+            TextBlock(text="A Third Thing Entirely", max_size=12.0, top=500.0),
+        ],
+    )
+
+    assert heuristic.extract(document).title.present is False
+
+
+def test_wrapping_does_not_swallow_the_next_element() -> None:
+    """A real gap between elements is not leading, whatever the font size."""
+    document = PdfDocument(
+        page_count=5,
+        front_text="body",
+        first_page_blocks=[
+            TextBlock(text="A Study of Something Interesting", max_size=12.0, top=200.0),
+            TextBlock(text="Norman, Oklahoma", max_size=12.0, top=600.0),
+        ],
+    )
+
+    # Two candidates, no hierarchy -- the point is that they stayed two.
+    assert heuristic.extract(document).title.present is False
 
 
 # ---- graceful degradation -------------------------------------------------

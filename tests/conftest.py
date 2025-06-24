@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_local_environment(monkeypatch):
+    """Settings under test are the documented defaults, not this machine's.
+
+    pydantic-settings reads `.env` relative to the cwd and `SCHOLARDROP_*` from the
+    environment, so a developer whose `.env` sets `SESSION_COOKIE_SECURE=false` for
+    local HTTP would fail the defaults test -- and, less visibly, run every other
+    test against settings nobody chose.
+    """
+    from scholardrop.settings import Settings
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for name in [key for key in os.environ if key.startswith("SCHOLARDROP_")]:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

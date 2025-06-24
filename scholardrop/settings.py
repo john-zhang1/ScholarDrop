@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     # raise it if the gate run shows fields being missed. Thinking is left at the
     # model default (adaptive) rather than disabled.
     anthropic_effort: Literal["low", "medium", "high"] = "low"
+    # Tier 1 gets one more go at a *retryable* failure (429, 5xx, connection drop,
+    # a cold grammar compile timing out) before the submission is degraded to
+    # heuristics for the rest of its life. Nothing here retries a refusal, a bad
+    # key, or a malformed request -- those fail the same way twice.
+    extraction_retry_attempts: int = 2
+    extraction_retry_backoff_seconds: float = 2.0
+    # The first parse call with a given output schema pays for compiling its
+    # grammar server-side, which is slow enough to time out; a throwaway call at
+    # startup means no real submission is the one that pays. Costs one small
+    # request per process start.
+    extraction_warm_on_startup: bool = True
 
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300

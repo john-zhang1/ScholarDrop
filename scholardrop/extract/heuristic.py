@@ -11,10 +11,13 @@ below LOW_CONFIDENCE so the review form flags it.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from scholardrop.extract.models import ExtractedMetadata, SourceTier, items, text
 from scholardrop.extract.reader import PdfDocument, TextBlock
+
+log = logging.getLogger("scholardrop.extract")
 
 # --- confidences (see the module docstring for why these are low) -----------
 XMP_CONFIDENCE = 0.75
@@ -59,7 +62,8 @@ _DEPARTMENT = re.compile(
 )
 _NOISE = re.compile(
     r"^(?:by|a (?:thesis|dissertation)|submitted|in partial fulfillment|university|"
-    r"copyright|all rights reserved|degree of|presented to|the graduate)",
+    r"copyright|all rights reserved|degree of|presented to|the graduate|"
+    r"graduate (?:college|school|faculty))",
     re.IGNORECASE,
 )
 
@@ -244,22 +248,76 @@ _BANNER = re.compile(
 # --- layout ----------------------------------------------------------------
 
 
+# A title that wraps is still one run of text. Anything up to triple the font size
+# below the previous line is ordinary leading, including the double spacing a
+# university's ETD template mandates.
+_LINE_GAP_RATIO = 3.0
+
+
+def _merge_wrapped_lines(blocks: list[TextBlock]) -> list[TextBlock]:
+    """Join consecutive blocks that are lines of the same run of text.
+
+    PyMuPDF returns one block per line on a title page typeset in Word, so a title
+    that wraps arrives as two blocks and picking "the biggest block" truncates it
+    at the line break. Same font size plus a gap no wider than normal leading is
+    what "these belong together" looks like on a title page.
+    """
+    merged: list[TextBlock] = []
+    previous_tops: list[float] = []
+
+    for block in sorted(blocks, key=lambda b: b.top):
+        if merged and _continues_previous(merged[-1], previous_tops[-1], block):
+            group = merged[-1]
+            merged[-1] = TextBlock(
+                text=f"{group.text} {block.text}",
+                max_size=group.max_size,
+                top=group.top,
+            )
+            previous_tops[-1] = block.top
+        else:
+            merged.append(block)
+            previous_tops.append(block.top)
+    return merged
+
+
+def _continues_previous(group: TextBlock, last_top: float, block: TextBlock) -> bool:
+    gap = block.top - last_top
+    return (
+        round(group.max_size, 1) == round(block.max_size, 1)
+        and 0 < gap <= block.max_size * _LINE_GAP_RATIO
+    )
+
+
 def _title_from_layout(blocks: list[TextBlock]):
-    """Largest multi-word text block on page 1, ignoring boilerplate."""
+    """The title block on page 1 -- when the page says which block that is."""
     candidates = [
         block
-        for block in blocks
+        for block in _merge_wrapped_lines(blocks)
         if 2 <= block.word_count <= 40
         and not _NOISE.match(block.text)
         and _plausible_title(block.text)
     ]
     if not candidates:
         return text(None)
-    biggest = max(candidates, key=lambda b: (b.max_size, -b.top))
-    # If nothing stands out typographically, this is a guess about a guess.
+
     sizes = {round(b.max_size, 1) for b in blocks}
-    confidence = LAYOUT_CONFIDENCE if len(sizes) > 1 else LAYOUT_CONFIDENCE - 0.15
-    return text(_tidy(biggest.text), confidence, SourceTier.HEURISTIC)
+    if len(sizes) > 1:
+        biggest = max(candidates, key=lambda b: (b.max_size, -b.top))
+        return text(_tidy(biggest.text), LAYOUT_CONFIDENCE, SourceTier.HEURISTIC)
+
+    # One font size across the whole page -- a Word-typeset ETD title page -- means
+    # the layout carries no signal about which block is the title, and "biggest,
+    # then topmost" degenerates into picking off the letterhead. One survivor of
+    # the boilerplate filter is still an answer; several is a coin toss, and a
+    # wrong title that looks authoritative is worse than an empty field the
+    # reviewer fills in. Same rule tier 1's prompt follows.
+    if len(candidates) > 1:
+        log.info(
+            "page 1 has no typographic hierarchy and %d title candidates; no title guessed",
+            len(candidates),
+        )
+        return text(None)
+    return text(_tidy(candidates[0].text), LAYOUT_CONFIDENCE - 0.15, SourceTier.HEURISTIC)
 
 
 # --- section slicing -------------------------------------------------------

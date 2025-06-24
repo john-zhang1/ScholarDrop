@@ -12,7 +12,9 @@ to tier 2 (see pipeline.py). Extraction never blocks a submission.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,6 +33,9 @@ MAX_TOKENS = 4096
 # Front matter plus tail; enough for any ETD's title page, committee page, and
 # abstract without paying for the whole thesis.
 MAX_CHARS = 60_000
+# The warm-up call only exists to compile the grammar; it needs room for a
+# schema-shaped answer of nulls and nothing more.
+WARM_MAX_TOKENS = 256
 
 
 class LlmUnavailable(Exception):
@@ -148,17 +153,7 @@ async def extract(
         raise LlmUnavailable("PDF has no extractable text; nothing to send")
 
     api_client = client or _default_client(settings)
-    try:
-        response = await api_client.messages.parse(
-            model=settings.anthropic_model,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            output_config={"effort": settings.anthropic_effort},
-            messages=[{"role": "user", "content": build_prompt(document)}],
-            output_format=LlmExtraction,
-        )
-    except Exception as exc:  # network, auth, rate limit, refusal -- all fall back
-        raise LlmUnavailable(f"extraction request failed: {type(exc).__name__}: {exc}") from exc
+    response = await _parse_with_retry(api_client, build_prompt(document), settings)
 
     if getattr(response, "stop_reason", None) == "refusal":
         raise LlmUnavailable("the model declined to process this document")
@@ -174,6 +169,100 @@ async def extract(
         getattr(getattr(response, "usage", None), "output_tokens", "?"),
     )
     return to_metadata(parsed)
+
+
+async def warm_grammar(settings: Settings, *, client: Any | None = None) -> None:
+    """Compile `LlmExtraction`'s grammar before a real submission needs it.
+
+    The first `parse` call with a given output schema pays to compile its grammar
+    server-side. Observed on this schema: ~105s cold and a 400 'Grammar compilation
+    timed out' when it does not make it, against ~17s once the grammar is cached.
+    A submission should never be the request that discovers this, so a throwaway
+    call at startup takes the hit instead. Raises for the caller to log.
+    """
+    api_client = client or _default_client(settings)
+    await api_client.messages.parse(
+        model=settings.anthropic_model,
+        max_tokens=WARM_MAX_TOKENS,
+        system=SYSTEM_PROMPT,
+        output_config={"effort": settings.anthropic_effort},
+        messages=[{"role": "user", "content": WARM_PROMPT}],
+        output_format=LlmExtraction,
+    )
+
+
+WARM_PROMPT = (
+    "Extract the metadata for this document.\n\n"
+    "Text extracted from the PDF follows, between markers.\n\n"
+    "<document_text>\n</document_text>"
+)
+
+# A 400 is normally a permanent "this request is wrong", with one exception worth
+# knowing by name: the grammar compile that ran out of time. Retrying it works,
+# because the compile that timed out is still cached by the time we ask again.
+_RETRYABLE_MESSAGE = re.compile(
+    r"grammar compilation timed out|overloaded|timed? ?out|temporarily unavailable",
+    re.IGNORECASE,
+)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Is asking again the sort of thing that might work?
+
+    Deliberately conservative: an unrecognised failure is treated as permanent, so
+    a genuine bad-request bug costs one call rather than several and the user is
+    not left waiting on retries that were never going to help.
+    """
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+
+    if isinstance(status, int):
+        if status in {408, 409, 429} or status >= 500:
+            return True
+        if status == 400:
+            return bool(_RETRYABLE_MESSAGE.search(str(exc)))
+        # 401/403 (key), 413 (too big), 422 (schema) -- all fail identically twice.
+        return False
+
+    # No HTTP status at all: the request did not complete. Connection resets and
+    # timeouts are exactly what a second attempt is for.
+    if isinstance(exc, ConnectionError | TimeoutError):
+        return True
+    return bool(_RETRYABLE_MESSAGE.search(str(exc)))
+
+
+async def _parse_with_retry(api_client: Any, prompt: str, settings: Settings) -> Any:
+    """Call the API, retrying the failures where that is not pointless."""
+    attempts = max(1, settings.extraction_retry_attempts)
+    last: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return await api_client.messages.parse(
+                model=settings.anthropic_model,
+                max_tokens=MAX_TOKENS,
+                system=SYSTEM_PROMPT,
+                output_config={"effort": settings.anthropic_effort},
+                messages=[{"role": "user", "content": prompt}],
+                output_format=LlmExtraction,
+            )
+        except Exception as exc:  # network, auth, rate limit -- classified below
+            last = exc
+            if attempt >= attempts or not _is_retryable(exc):
+                break
+            delay = settings.extraction_retry_backoff_seconds * attempt
+            log.info(
+                "tier 1 attempt %d/%d failed (%s: %s); retrying in %.1fs",
+                attempt,
+                attempts,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    raise LlmUnavailable(f"extraction request failed: {type(last).__name__}: {last}") from last
 
 
 def to_metadata(parsed: LlmExtraction) -> ExtractedMetadata:
