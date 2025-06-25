@@ -52,47 +52,51 @@ async def login_submit(
         return form_error("Enter your username and password.")
 
     client = request.app.state.client_factory(instance)
-    # The password is handed to DSpace here and referenced nowhere else: it is not
-    # stored on the session, the client, or in any log line.
+    # Closed on every path. A failed sign-in used to return without closing it, and
+    # failed sign-ins are exactly what an attacker generates in bulk -- each one
+    # leaking a connection pool.
     try:
-        status = await client.login(user, password)
-    except DSpaceAuthError:
-        limiter.record_failure(key)
-        log.info("failed sign-in attempt for %s", key)
-        # Deliberately vague: don't reveal whether the account exists.
-        return form_error("Those credentials were not accepted by the repository.", status=401)
-    except DSpaceUnavailable as exc:
-        log.error("repository unreachable during sign-in: %s", exc)
-        return form_error(
-            f"{instance.name} could not be reached. Please try again shortly.", status=502
+        # The password is handed to DSpace here and referenced nowhere else: it is
+        # not stored on the session, the client, or in any log line.
+        try:
+            status = await client.login(user, password)
+        except DSpaceAuthError:
+            limiter.record_failure(key)
+            log.info("failed sign-in attempt for %s", key)
+            # Deliberately vague: don't reveal whether the account exists.
+            return form_error("Those credentials were not accepted by the repository.", status=401)
+        except DSpaceUnavailable as exc:
+            log.error("repository unreachable during sign-in: %s", exc)
+            return form_error(
+                f"{instance.name} could not be reached. Please try again shortly.", status=502
+            )
+
+        if not status.authenticated:
+            limiter.record_failure(key)
+            return form_error("The repository did not complete the sign-in.", status=401)
+
+        limiter.reset(key)
+        sessions = request.app.state.sessions
+        # A fresh session id on sign-in, so a pre-login cookie cannot be reused.
+        old = get_session(request)
+        if old is not None:
+            sessions.delete(old.id)
+
+        eperson = status.eperson
+        session = sessions.create(
+            instance_key=instance.key,
+            jwt=client.bearer_token,
+            xsrf_token=client.xsrf_token,
+            eperson_name=eperson.display_name if eperson else None,
+            eperson_uuid=eperson.uuid if eperson else None,
         )
+        log.info("signed in %s at %s", session.eperson_name, instance.key)
 
-    if not status.authenticated:
-        limiter.record_failure(key)
+        response = RedirectResponse("/browse", status_code=303)
+        _set_session_cookie(request, response, session.id)
+        return response
+    finally:
         await client.aclose()
-        return form_error("The repository did not complete the sign-in.", status=401)
-
-    limiter.reset(key)
-    sessions = request.app.state.sessions
-    # A fresh session id on sign-in, so a pre-login cookie cannot be reused.
-    old = get_session(request)
-    if old is not None:
-        sessions.delete(old.id)
-
-    eperson = status.eperson
-    session = sessions.create(
-        instance_key=instance.key,
-        jwt=client.bearer_token,
-        xsrf_token=client.xsrf_token,
-        eperson_name=eperson.display_name if eperson else None,
-        eperson_uuid=eperson.uuid if eperson else None,
-    )
-    await client.aclose()
-    log.info("signed in %s at %s", session.eperson_name, instance.key)
-
-    response = RedirectResponse("/browse", status_code=303)
-    _set_session_cookie(request, response, session.id)
-    return response
 
 
 @router.post("/logout")
@@ -137,12 +141,18 @@ def _set_session_cookie(request: Request, response: Response, session_id: str) -
 
 
 def _client_ip(request: Request) -> str:
-    """Best-effort client identity for rate limiting.
+    """Client identity for rate limiting, from the connection rather than a header.
 
-    Behind the nginx of DESIGN.md §8, X-Forwarded-For is the real client; deployment
-    must ensure nginx sets it, since a client can otherwise send it themselves.
+    Reading `X-Forwarded-For` here would be worse than useless. nginx appends to it
+    (`$proxy_add_x_forwarded_for`), so a client that sends its own value keeps the
+    left-hand entries -- and trusting any of them lets an attacker rotate the header
+    to get unlimited password attempts, or spoof someone else's address to lock them
+    out. The header is attacker-controlled data, not a client identity.
+
+    `request.client` is the resolved one. Uvicorn's ProxyHeadersMiddleware
+    (`--proxy-headers --forwarded-allow-ips=127.0.0.1` in deploy/scholardrop.service)
+    rewrites it from X-Forwarded-For *only* when the peer is the trusted proxy, and
+    takes the right-most untrusted entry -- the one nginx appended, which the client
+    cannot forge.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"

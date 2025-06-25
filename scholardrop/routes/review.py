@@ -27,7 +27,13 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
 from scholardrop.dspace import DSpaceError, DSpaceValidationError
-from scholardrop.routes.deps import dspace_client, render, require_session, session_instance
+from scholardrop.routes.deps import (
+    DraftId,
+    dspace_client,
+    render,
+    require_session,
+    session_instance,
+)
 from scholardrop.submission.definition import (
     config_hrefs,
     load_form_configs,
@@ -77,7 +83,7 @@ async def _load(client: Any, wsi_id: str, *, cache: Any, instance_key: str) -> _
 
 
 @router.get("/review/{wsi_id}", response_class=HTMLResponse)
-async def review(request: Request, wsi_id: str) -> HTMLResponse:
+async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
     session = require_session(request)
     instance = session_instance(request, session)
     cache = request.app.state.form_configs
@@ -109,12 +115,12 @@ async def review(request: Request, wsi_id: str) -> HTMLResponse:
         licence=licence,
         license_checked=form.license_granted,
         extraction=job.metadata if job else None,
-        filename=(job.filename if job else None) or session.data.get("upload_filename"),
+        filename=(job.filename if job else None) or session.submission(wsi_id).get("filename"),
     )
 
 
 @router.post("/review/{wsi_id}/edit", response_class=HTMLResponse)
-async def edit(request: Request, wsi_id: str) -> HTMLResponse:
+async def edit(request: Request, wsi_id: DraftId) -> HTMLResponse:
     """Back from the confirm step, with every edit still in place."""
     session = require_session(request)
     instance = session_instance(request, session)
@@ -138,13 +144,13 @@ async def edit(request: Request, wsi_id: str) -> HTMLResponse:
         "review.html",
         form=form,
         licence=licence,
-        filename=session.data.get("upload_filename"),
+        filename=session.submission(wsi_id).get("filename"),
         license_checked=license_granted(posted),
     )
 
 
 @router.post("/review/{wsi_id}/confirm", response_class=HTMLResponse)
-async def confirm(request: Request, wsi_id: str) -> HTMLResponse:
+async def confirm(request: Request, wsi_id: DraftId) -> HTMLResponse:
     """The last look before anything is written: what will be sent, and the licence.
 
     Nothing has been patched at this point -- the values live in this page's
@@ -158,6 +164,9 @@ async def confirm(request: Request, wsi_id: str) -> HTMLResponse:
     async with dspace_client(request, session) as client:
         live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
+        collection = await _collection_name(
+            client, live.item, cache=cache, instance_key=instance.key
+        )
 
     submitted = parse_submission(posted, live.allowed)
     form = build_form(
@@ -173,13 +182,13 @@ async def confirm(request: Request, wsi_id: str) -> HTMLResponse:
         form=form,
         licence=licence,
         license_checked=license_granted(posted),
-        collection_name=session.data.get("collection_name"),
-        filename=session.data.get("upload_filename"),
+        collection_name=collection,
+        filename=session.submission(wsi_id).get("filename"),
     )
 
 
 @router.post("/review/{wsi_id}/deposit", response_class=HTMLResponse)
-async def deposit(request: Request, wsi_id: str) -> Response:
+async def deposit(request: Request, wsi_id: DraftId) -> Response:
     """Patch the sections, then hand the submission to the collection's workflow."""
     session = require_session(request)
     instance = session_instance(request, session)
@@ -190,6 +199,9 @@ async def deposit(request: Request, wsi_id: str) -> Response:
     async with dspace_client(request, session) as client:
         live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
+        collection = await _collection_name(
+            client, live.item, cache=cache, instance_key=instance.key
+        )
         submitted = parse_submission(posted, live.allowed)
 
         def back(message: str, errors: dict[str, list[str]], status: int) -> HTMLResponse:
@@ -206,7 +218,7 @@ async def deposit(request: Request, wsi_id: str) -> Response:
                 "review.html",
                 form=form,
                 licence=licence,
-                filename=session.data.get("upload_filename"),
+                filename=session.submission(wsi_id).get("filename"),
                 license_checked=granted,
                 deposit_error=message,
             )
@@ -288,12 +300,12 @@ async def deposit(request: Request, wsi_id: str) -> Response:
         "archived" if result.archived else "entered workflow",
     )
     request.app.state.extractions.forget(session.id, wsi_id)
-    session.workspaceitem_id = None
-    session.data.pop("upload_filename", None)
+    if session.workspaceitem_id == wsi_id:
+        session.workspaceitem_id = None
     # The repository has the file now, so the local copy has no further purpose
-    # (DESIGN.md §8). Only this submission's file goes -- the session may still
-    # be mid-flow on another one.
-    stored = session.data.pop("upload_path", None)
+    # (DESIGN.md §8). Only *this* submission's file goes -- the session may still
+    # be mid-flow on another one, and its file must survive.
+    stored = session.forget_submission(wsi_id).get("path")
     if stored:
         Path(stored).unlink(missing_ok=True)
     request.app.state.sessions.save(session)
@@ -303,14 +315,14 @@ async def deposit(request: Request, wsi_id: str) -> Response:
         "deposited.html",
         result=result,
         archived_item=archived_item,
-        collection_name=session.data.get("collection_name"),
+        collection_name=collection,
     )
 
 
 @router.get("/review/{wsi_id}/row", response_class=HTMLResponse)
 async def add_row(
     request: Request,
-    wsi_id: str,
+    wsi_id: DraftId,
     section: str = Query(...),
     field: str = Query(...),
 ) -> HTMLResponse:
@@ -351,6 +363,29 @@ async def add_row(
         options=vocabularies.get(match.vocabulary or "", []),
     )
     return render(request, "partials/field_row.html", field=form_field, value=FormValue())
+
+
+async def _collection_name(client: Any, item: Any, *, cache: Any, instance_key: str) -> str:
+    """The name of the collection *this draft* is going to.
+
+    Read from the draft rather than remembered from the session: a session has one
+    "collection I just picked", but a user can be part-way through several drafts,
+    and a resumed one may belong to a collection they chose days ago. Naming the
+    wrong collection on the page that asks "shall I deposit this?" is exactly the
+    kind of quiet wrongness the confirm step exists to prevent.
+    """
+    collection_uuid = item.sections.get("collection")
+    if not isinstance(collection_uuid, str) or not collection_uuid:
+        return ""
+    key = (instance_key, collection_uuid)
+    if key not in cache.collection_names:
+        try:
+            cache.collection_names[key] = (await client.collection(collection_uuid)).name
+        except DSpaceError as exc:
+            # Not worth failing the page over; the templates all read "or ...".
+            log.info("could not name collection %s: %s", collection_uuid, exc)
+            cache.collection_names[key] = ""
+    return cache.collection_names[key]
 
 
 async def _licence_text(client: Any, item: Any, *, cache: Any, instance_key: str) -> Any:

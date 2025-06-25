@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -17,7 +18,7 @@ from fastapi.responses import HTMLResponse
 
 from scholardrop.dspace import DSpaceError
 from scholardrop.dspace.models import WorkspaceItem
-from scholardrop.routes.deps import dspace_client, render, require_session
+from scholardrop.routes.deps import DraftId, dspace_client, render, require_session
 
 router = APIRouter()
 log = logging.getLogger("scholardrop.drafts")
@@ -105,14 +106,14 @@ async def drafts_list(request: Request, page: int = Query(0, ge=0)) -> HTMLRespo
 
 
 @router.get("/drafts/{wsi_id}/discard", response_class=HTMLResponse)
-async def confirm_discard(request: Request, wsi_id: str) -> HTMLResponse:
+async def confirm_discard(request: Request, wsi_id: DraftId) -> HTMLResponse:
     """Ask first: discarding deletes the draft and its file in DSpace."""
     require_session(request)
     return render(request, "partials/draft_confirm.html", wsi_id=wsi_id)
 
 
 @router.post("/drafts/{wsi_id}/discard", response_class=HTMLResponse)
-async def discard(request: Request, wsi_id: str) -> HTMLResponse:
+async def discard(request: Request, wsi_id: DraftId) -> HTMLResponse:
     session = require_session(request)
     async with dspace_client(request, session) as client:
         await client.delete_workspaceitem(wsi_id)
@@ -121,6 +122,11 @@ async def discard(request: Request, wsi_id: str) -> HTMLResponse:
     request.app.state.extractions.forget(session.id, wsi_id)
     if session.workspaceitem_id == wsi_id:
         session.workspaceitem_id = None
-        request.app.state.sessions.save(session)
+    # Discarding is an exit from the flow, so the local upload goes with it rather
+    # than waiting for the TTL sweep -- and only this draft's, never another tab's.
+    stored = session.forget_submission(wsi_id).get("path")
+    if stored:
+        Path(stored).unlink(missing_ok=True)
+    request.app.state.sessions.save(session)
 
     return await drafts_list(request, page=0)

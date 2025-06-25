@@ -112,3 +112,34 @@ def test_the_upload_directory_is_random_and_stable_per_session(tmp_path: Path) -
     assert first != other
     assert one.id not in str(first), "the session id is a credential; keep it off the disk"
     assert first.is_dir()
+
+
+async def test_a_dribbled_non_pdf_is_still_refused(directory: Path) -> None:
+    """`read()` may return fewer bytes than asked for, so the signature can arrive
+    split across chunks. Judging the first chunk alone let a 2-byte-at-a-time body
+    past the check."""
+    with pytest.raises(UploadRejected, match="not a PDF"):
+        await store_upload(
+            FakeUpload("trojan.pdf", b"MZ\x90\x00\x03exe payload", chunk=2),
+            directory=directory,
+            max_bytes=1024,
+        )
+
+    assert list(directory.iterdir()) == [], "nothing is left on disk"
+
+
+async def test_a_dribbled_pdf_is_accepted(directory: Path) -> None:
+    """The buffering must not reject a real PDF that arrives in small reads."""
+    stored = await store_upload(
+        FakeUpload("thesis.pdf", PDF, chunk=2), directory=directory, max_bytes=1024
+    )
+
+    assert stored.size == len(PDF)
+    assert stored.path.read_bytes() == PDF
+
+
+async def test_a_file_too_short_to_be_a_pdf_is_refused(directory: Path) -> None:
+    with pytest.raises(UploadRejected, match="not a PDF"):
+        await store_upload(FakeUpload("tiny.pdf", b"%PD"), directory=directory, max_bytes=1024)
+
+    assert list(directory.iterdir()) == []

@@ -131,3 +131,28 @@ def test_cookie_rejects_other_secret() -> None:
     raw = SessionCookie("secret-a", name="sd", secure=True).dumps("session-id-123")
 
     assert SessionCookie("secret-b", name="sd", secure=True).loads(raw) is None
+
+
+def test_per_draft_scratch_space_is_keyed_by_workspaceitem(store) -> None:
+    """Two tabs are two drafts; one must not overwrite the other."""
+    session = store.create()
+    session.remember_submission("42", filename="first.pdf", path="/tmp/a")
+    session.remember_submission("43", filename="second.pdf", path="/tmp/b")
+
+    assert session.submission("42")["filename"] == "first.pdf"
+    assert session.submission("43")["filename"] == "second.pdf"
+
+    dropped = session.forget_submission("43")
+
+    assert dropped["path"] == "/tmp/b"
+    assert session.submission("43") == {}
+    assert session.submission("42")["path"] == "/tmp/a", "the other draft is untouched"
+
+
+def test_reading_an_unknown_draft_does_not_grow_the_session(store) -> None:
+    """/review/{id} takes the id from the URL, so a read must not create an entry."""
+    session = store.create()
+
+    assert session.submission("no-such-draft") == {}
+    assert session.forget_submission("no-such-draft") == {}
+    assert session.data.get("submissions", {}) == {}

@@ -13,6 +13,7 @@ part and it must never be able to block the submission.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, File, Request, UploadFile
@@ -20,6 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from scholardrop.dspace import DSpaceError, DSpaceForbidden
 from scholardrop.routes.deps import (
+    DraftId,
     dspace_client,
     is_htmx,
     render,
@@ -95,7 +97,10 @@ async def upload(request: Request, file: UploadFile | None = File(None)) -> Resp
             return response
 
         try:
-            item = await client.upload_bitstream(item.id, stored.filename, stored.read_bytes())
+            # Reading it back is up to SCHOLARDROP_UPLOAD_MAX_BYTES off disk, which
+            # is far too long to spend on the one event loop this process has.
+            content = await asyncio.to_thread(stored.read_bytes)
+            item = await client.upload_bitstream(item.id, stored.filename, content)
         except DSpaceError as exc:
             # Don't leave an empty draft behind for a failure the user did not
             # cause (DESIGN.md §7).
@@ -112,8 +117,9 @@ async def upload(request: Request, file: UploadFile | None = File(None)) -> Resp
             )
 
     session.workspaceitem_id = item.id
-    session.data["upload_filename"] = stored.filename
-    session.data["upload_path"] = str(stored.path)
+    # Keyed by workspaceitem: a second tab starting another submission must not
+    # take this one's file or collection with it.
+    session.remember_submission(item.id, filename=stored.filename, path=str(stored.path))
     request.app.state.sessions.save(session)
 
     profile = request.app.state.registry.profile_for(instance)
@@ -137,7 +143,7 @@ async def upload(request: Request, file: UploadFile | None = File(None)) -> Resp
 
 
 @router.get("/submit/status/{wsi_id}", response_class=HTMLResponse)
-async def status(request: Request, wsi_id: str) -> Response:
+async def status(request: Request, wsi_id: DraftId) -> Response:
     """Poll target: keep waiting, or send the browser to the review form."""
     session = require_session(request)
     job = request.app.state.extractions.get(session.id, wsi_id)

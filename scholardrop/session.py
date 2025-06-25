@@ -17,6 +17,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from itsdangerous import BadSignature, URLSafeSerializer
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 
 @dataclass
@@ -40,6 +43,33 @@ class Session:
     @property
     def authenticated(self) -> bool:
         return self.jwt is not None
+
+    def submission(self, workspaceitem_id: str | int) -> dict[str, Any]:
+        """Scratch space belonging to **one** draft. Read-only; never creates.
+
+        Anything about a specific submission -- the uploaded file's name and path --
+        has to be keyed by workspaceitem, not held in one slot per session. Two tabs
+        are two drafts: with a single slot, depositing one deletes the other's
+        uploaded file and the pages label it with the wrong filename.
+
+        Reads must not write, or hitting /review/{id} with invented ids would grow
+        this dict for the life of the session. A resumed draft legitimately has no
+        entry, so an empty one is a normal answer.
+        """
+        submissions = self.data.get("submissions") or {}
+        return submissions.get(str(workspaceitem_id), {})
+
+    def remember_submission(self, workspaceitem_id: str | int, **values: Any) -> None:
+        """Record what this session knows about one draft."""
+        submissions = self.data.setdefault("submissions", {})
+        submissions.setdefault(str(workspaceitem_id), {}).update(values)
+
+    def forget_submission(self, workspaceitem_id: str | int) -> dict[str, Any]:
+        """Drop one draft's scratch space and hand it back, for cleanup."""
+        submissions = self.data.get("submissions")
+        if not submissions:
+            return {}
+        return submissions.pop(str(workspaceitem_id), {})
 
     def expires_at(self, ttl_seconds: int) -> float:
         return self.last_seen + ttl_seconds
@@ -145,3 +175,50 @@ class SessionCookie:
         except BadSignature:
             return None
         return value if isinstance(value, str) else None
+
+
+class SlidingSessionMiddleware(BaseHTTPMiddleware):
+    """Re-issue the session cookie on every request that used a live session.
+
+    The server-side TTL is an *idle* timeout -- get() refreshes last_seen, so an
+    active user's session never expires. The cookie has to slide with it, or the
+    browser drops it a fixed TTL after sign-in no matter how busy the user was:
+    someone filling in a long review form would post to /confirm with no cookie and
+    lose every edit they had typed, because the form lives in the page until deposit.
+
+    Only a request that arrived with a valid, unexpired session is refreshed, and
+    never one whose response already sets the cookie itself -- that is sign-in
+    (minting a new id) or sign-out (deleting it), and neither wants a second opinion.
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        state = request.app.state
+        cookie: SessionCookie = state.cookie
+
+        if _already_sets(response, cookie.name):
+            return response
+        session_id = cookie.loads(request.cookies.get(cookie.name))
+        if session_id is None:
+            return response
+        # touch=False: the route has already refreshed last_seen if it looked at the
+        # session. This must not keep a session alive on static-asset traffic alone.
+        if state.sessions.get(session_id, touch=False) is None:
+            return response
+
+        response.set_cookie(
+            cookie.name,
+            cookie.dumps(session_id),
+            max_age=state.settings.session_ttl_seconds,
+            httponly=True,
+            secure=cookie.secure,
+            samesite="lax",
+            path="/",
+        )
+        return response
+
+
+def _already_sets(response: Response, name: str) -> bool:
+    return any(
+        header.split("=", 1)[0].strip() == name for header in response.headers.getlist("set-cookie")
+    )

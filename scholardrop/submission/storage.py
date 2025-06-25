@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from scholardrop.extract.reader import looks_like_pdf
+from scholardrop.extract.reader import PDF_MAGIC, looks_like_pdf
 
 log = logging.getLogger("scholardrop.upload")
 
@@ -93,7 +93,11 @@ async def store_upload(upload: UploadStream, *, directory: Path, max_bytes: int)
     filename = safe_filename(getattr(upload, "filename", None))
     target = directory / f"{secrets.token_urlsafe(8)}-{filename}"
     size = 0
-    first = True
+    # The signature can straddle chunks: `read()` may hand back fewer bytes than
+    # asked for, so a body fed in dribs could pass a check made on the first chunk
+    # alone. Buffer until there is enough to judge, then judge once.
+    head = b""
+    checked = False
 
     try:
         with target.open("wb") as sink:
@@ -101,12 +105,14 @@ async def store_upload(upload: UploadStream, *, directory: Path, max_bytes: int)
                 chunk = await upload.read(CHUNK)
                 if not chunk:
                     break
-                if first:
-                    if not looks_like_pdf(chunk):
-                        raise UploadRejected(
-                            "That file is not a PDF. ScholarDrop accepts a single PDF."
-                        )
-                    first = False
+                if not checked:
+                    head += chunk
+                    if len(head) >= len(PDF_MAGIC):
+                        if not looks_like_pdf(head):
+                            raise UploadRejected(
+                                "That file is not a PDF. ScholarDrop accepts a single PDF."
+                            )
+                        checked = True
                 size += len(chunk)
                 if size > max_bytes:
                     raise UploadRejected(
@@ -124,6 +130,11 @@ async def store_upload(upload: UploadStream, *, directory: Path, max_bytes: int)
     if size == 0:
         target.unlink(missing_ok=True)
         raise UploadRejected("That file is empty. Choose the PDF you want to deposit.")
+
+    if not checked:
+        # Ran out of file before the signature was complete: too short to be a PDF.
+        target.unlink(missing_ok=True)
+        raise UploadRejected("That file is not a PDF. ScholarDrop accepts a single PDF.")
 
     log.info("stored upload %s (%d bytes)", target.name, size)
     return StoredUpload(path=target, filename=filename, size=size)

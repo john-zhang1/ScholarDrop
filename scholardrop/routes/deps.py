@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import Request
+from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse
 
 from scholardrop.config import Instance
-from scholardrop.dspace import DSpaceClient
+from scholardrop.dspace import DSpaceClient, DSpaceNotFound
 from scholardrop.session import Session
 
 
@@ -32,6 +32,34 @@ class InstanceNotFound(Exception):
 
 def is_htmx(request: Request) -> bool:
     return request.headers.get("HX-Request") == "true"
+
+
+def draft_id(wsi_id: str) -> str:
+    """A workspaceitem id from a URL, checked before it reaches a DSpace path.
+
+    Every client method interpolates this into a path (`/submission/workspaceitems/
+    {id}`) and `urljoin` resolves `..`, so an id is not something to pass through
+    unexamined. Routing already turns the obvious `1/../../core/items/x` into a 404
+    before a handler sees it (measured, not assumed) -- what actually arrives here
+    is junk like `abc`, `1;drop` or ` 1`, which used to become a real DSpace round
+    trip and a 500-shaped answer. DSpace ids are integers; anything else stops here.
+
+    Raised as `DSpaceNotFound` because that is what it means to the person who
+    followed a mangled link, and it already renders the right page.
+    """
+    # `isascii()` matters: str.isdigit() is true of "٣" and "²" too, and those are
+    # not ids DSpace could have issued.
+    if not (wsi_id.isascii() and wsi_id.isdigit()):
+        raise DSpaceNotFound(
+            "that draft id is not one this repository could have issued",
+            path=f"/submission/workspaceitems/{wsi_id}",
+        )
+    return wsi_id
+
+
+# Every route that takes a draft id from the URL declares it as this, so the check
+# is one word at the point of entry rather than a line each handler can forget.
+DraftId = Annotated[str, Depends(draft_id)]
 
 
 def get_session(request: Request) -> Session | None:

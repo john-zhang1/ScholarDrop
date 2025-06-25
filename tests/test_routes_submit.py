@@ -84,7 +84,7 @@ def test_the_draft_is_remembered_on_the_session(with_collection, app, pdf_bytes)
 
     session = next(iter(app.state.sessions._sessions.values()))
     assert session.workspaceitem_id == "42"
-    assert session.data["upload_filename"] == "thesis.pdf"
+    assert session.submission("42")["filename"] == "thesis.pdf"
 
 
 def test_without_htmx_the_upload_redirects_straight_to_the_form(with_collection, pdf_bytes) -> None:

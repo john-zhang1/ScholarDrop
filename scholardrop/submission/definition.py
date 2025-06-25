@@ -18,6 +18,7 @@ DSpace). The cache lives on `app.state`, so restarting ScholarDrop clears it.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from scholardrop.dspace import DSpaceError, VocabularyEntry
@@ -27,22 +28,98 @@ from scholardrop.submission.form import FORM_SECTION, parse_fields, sections_of
 log = logging.getLogger("scholardrop.submission")
 
 
-class ConfigCache:
-    """Submission definitions, forms and vocabularies, keyed by instance."""
+DEFAULT_TTL_SECONDS = 3600.0
 
-    def __init__(self) -> None:
-        self.definitions: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        self.forms: dict[tuple[str, str], dict[str, Any]] = {}
-        self.vocabularies: dict[tuple[str, str], list[VocabularyEntry]] = {}
-        # Keyed by collection, not by instance: the deposit licence is a
-        # collection's own text.
-        self.licences: dict[tuple[str, str], Any] = {}
+
+class _Expiring:
+    """A dict whose entries go stale, with just enough of the mapping protocol.
+
+    Reads honour the TTL, so call sites keep using `get` / `in` / `[]` and simply
+    stop seeing an entry once it is too old.
+    """
+
+    def __init__(self, ttl_seconds: float, *, clock: Any = time.monotonic) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._clock = clock
+        self._entries: dict[Any, tuple[float, Any]] = {}
+
+    def _fresh(self, key: Any) -> bool:
+        stored = self._entries.get(key)
+        if stored is None:
+            return False
+        if self._clock() - stored[0] > self.ttl_seconds:
+            del self._entries[key]
+            return False
+        return True
+
+    def __contains__(self, key: Any) -> bool:
+        return self._fresh(key)
+
+    def __getitem__(self, key: Any) -> Any:
+        if not self._fresh(key):
+            raise KeyError(key)
+        return self._entries[key][1]
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        self._entries[key] = (self._clock(), value)
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        return self._entries[key][1] if self._fresh(key) else default
 
     def clear(self) -> None:
-        self.definitions.clear()
-        self.forms.clear()
-        self.vocabularies.clear()
-        self.licences.clear()
+        self._entries.clear()
+
+    def sweep(self) -> int:
+        """Drop what has expired. Returns how many entries went."""
+        before = len(self._entries)
+        for key in list(self._entries):
+            self._fresh(key)
+        return before - len(self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+class ConfigCache:
+    """Submission definitions, forms and vocabularies, keyed by instance.
+
+    Entries expire. Repository configuration only changes when DSpace is
+    reconfigured -- which restarts DSpace, not us -- so the TTL is long; but
+    without one, a reconfigured collection served a stale form until someone
+    thought to restart ScholarDrop, and the per-collection entries only ever grew.
+    """
+
+    def __init__(self, ttl_seconds: float = DEFAULT_TTL_SECONDS) -> None:
+        self.ttl_seconds = ttl_seconds
+        self.definitions: Any = _Expiring(ttl_seconds)
+        self.forms: Any = _Expiring(ttl_seconds)
+        self.vocabularies: Any = _Expiring(ttl_seconds)
+        # Keyed by collection, not by instance: the deposit licence is a
+        # collection's own text.
+        self.licences: Any = _Expiring(ttl_seconds)
+        # Same again for the collection's display name, so naming the collection a
+        # draft belongs to does not cost a read on every confirm and deposit.
+        self.collection_names: Any = _Expiring(ttl_seconds)
+
+    def _all(self) -> tuple[Any, ...]:
+        return (
+            self.definitions,
+            self.forms,
+            self.vocabularies,
+            self.licences,
+            self.collection_names,
+        )
+
+    def clear(self) -> None:
+        for cache in self._all():
+            cache.clear()
+
+    def sweep(self) -> int:
+        """Drop every expired entry, so nothing lingers unread. Returns how many."""
+        return sum(cache.sweep() for cache in self._all())
+
+    def __len__(self) -> int:
+        return sum(len(cache) for cache in self._all())
 
 
 async def load_sections(

@@ -3,10 +3,17 @@
 The rule that matters: **extraction never blocks a submission**. If tier 1 is
 unavailable or errors, tier 2 runs; if that finds nothing, the user gets an honest
 empty form with a notice. A failure here is never a dead end.
+
+Reading and parsing a PDF is CPU-bound, and ScholarDrop is one process with one
+event loop (DESIGN.md §2). Run on the loop, parsing a large scanned thesis stalls
+every other user's request for as long as it takes -- so both synchronous stages,
+`read_pdf` and the tier-2 heuristics, go to a worker thread. Tier 1 is already
+network-bound and awaits properly.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -27,7 +34,7 @@ async def extract_from_pdf(
     client: object | None = None,
 ) -> tuple[ExtractedMetadata, PdfDocument]:
     """Read a PDF and extract its metadata with the instance's configured tier."""
-    document = read_pdf(source)
+    document = await asyncio.to_thread(read_pdf, source)
     metadata = await extract_from_document(
         document, instance=instance, settings=settings, client=client
     )
@@ -45,17 +52,19 @@ async def extract_from_document(
         # Configured off, not failed -- e.g. an instance whose documents must not be
         # sent to a third party (DESIGN.md §5, privacy note).
         log.info("instance %s is configured for heuristic extraction", instance.key)
-        return _heuristic(document)
+        return await _heuristic(document)
 
     try:
         return await llm.extract(document, settings, client=client)
     except llm.LlmUnavailable as exc:
         log.info("tier 1 unavailable (%s); falling back to heuristics", exc)
-        return _heuristic(document, fallback_reason=str(exc))
+        return await _heuristic(document, fallback_reason=str(exc))
 
 
-def _heuristic(document: PdfDocument, fallback_reason: str | None = None) -> ExtractedMetadata:
-    metadata = heuristic.extract(document)
+async def _heuristic(
+    document: PdfDocument, fallback_reason: str | None = None
+) -> ExtractedMetadata:
+    metadata = await asyncio.to_thread(heuristic.extract, document)
     if metadata.is_empty():
         # An honest nothing. The review form says extraction found nothing rather
         # than pretending the form is simply blank.

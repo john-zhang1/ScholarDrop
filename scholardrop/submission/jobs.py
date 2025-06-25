@@ -143,14 +143,31 @@ class ExtractionJobs:
         for key in [k for k in self._jobs if k[0] == owner]:
             del self._jobs[key]
 
-    def sweep(self, max_age_seconds: float) -> int:
-        """Drop finished jobs older than the session TTL. Returns how many."""
+    def sweep(
+        self, max_age_seconds: float, *, owner_is_live: Callable[[str], bool] | None = None
+    ) -> int:
+        """Drop finished jobs nobody can ask for again. Returns how many.
+
+        A job belongs to a session, so once that session is gone its result is
+        unreachable and can go immediately. While the session is alive the result
+        is kept however long the user takes: sweeping on age alone would quietly
+        un-prefill the review form of someone who uploaded, went to look something
+        up, and came back -- and the form would claim extraction found nothing,
+        which is exactly the silent failure the extraction contract forbids.
+
+        `max_age_seconds` is the fallback for callers that cannot say which
+        sessions are live.
+        """
         now = time.monotonic()
-        stale = [
-            key
-            for key, job in self._jobs.items()
-            if job.finished and now - (job.finished_at or job.started_at) > max_age_seconds
-        ]
+        stale = []
+        for key, job in self._jobs.items():
+            if not job.finished:
+                continue
+            if owner_is_live is None:
+                if now - (job.finished_at or job.started_at) > max_age_seconds:
+                    stale.append(key)
+            elif not owner_is_live(key[0]):
+                stale.append(key)
         for key in stale:
             del self._jobs[key]
         return len(stale)

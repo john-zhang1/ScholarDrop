@@ -27,6 +27,54 @@ log = logging.getLogger("scholardrop.security")
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
+# Content-Security-Policy. Every asset ScholarDrop serves is same-origin -- one
+# stylesheet, one vendored script, no fonts, no images, no CDN -- so everything is
+# `'self'` and injected markup cannot pull code in from anywhere.
+#
+# `'unsafe-eval'` is the one concession, and it is htmx's: `hx-on:` handlers are
+# compiled with `new Function`, so without it the tab switcher and the "remove
+# this row" button stop working silently. It is far weaker than it sounds here --
+# `script-src 'self'` still refuses inline `<script>`, so an injected script tag
+# does not run, and nothing attacker-controlled reaches eval: htmx only evaluates
+# attributes written into the templates, and Jinja2 autoescaping keeps user data
+# from becoming an attribute in the first place.
+#
+# Kept in the app rather than the nginx block because it describes what these
+# pages need, and because a policy nobody can test is how you ship a broken one.
+CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-eval'",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "object-src 'none'",
+    )
+)
+
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    # Belt and braces with frame-ancestors, for anything that predates CSP.
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach the response headers that constrain what a page may do."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        for header, value in SECURITY_HEADERS.items():
+            # nginx may set some of these too; do not send them twice.
+            response.headers.setdefault(header, value)
+        return response
+
 
 class SameOriginMiddleware(BaseHTTPMiddleware):
     """Refuse state-changing requests that came from another site."""

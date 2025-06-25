@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 
+    # How long the cached repository configuration (submission definitions, forms,
+    # vocabularies, licences, collection names) stays good. Long, because changing
+    # any of it means reconfiguring and restarting DSpace -- but not forever, or a
+    # reconfigured collection serves a stale form until someone restarts this app.
+    config_cache_ttl_seconds: int = 3600
+
     log_level: str = "INFO"
 
     _generated_secret: bool = False

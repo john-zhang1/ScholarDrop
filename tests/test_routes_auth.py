@@ -213,24 +213,57 @@ def test_rotated_tokens_are_written_back_to_the_session(signed_in, app, fake_dsp
     assert session.jwt == "refreshed-jwt"
 
 
-@pytest.mark.parametrize("header", ["1.2.3.4", "1.2.3.4, 10.0.0.1"])
-def test_rate_limit_keys_on_forwarded_client(web, app, fake_dspace, header: str) -> None:
+def test_a_failed_sign_in_closes_its_client(web, fake_dspace) -> None:
+    """Failed sign-ins are what an attacker generates in bulk; each one used to
+    return without closing the client and leak its connection pool."""
+    fake_dspace.login_ok = False
+
+    response = web.post("/login/shareok", data={"user": "j", "password": "wrong"})
+
+    assert response.status_code == 401
+    assert fake_dspace.closed, "the client was left open"
+
+
+def test_an_unreachable_repository_closes_its_client(web, fake_dspace) -> None:
+    from scholardrop.dspace import DSpaceUnavailable
+
+    fake_dspace.login_error = DSpaceUnavailable("connection refused", path="/authn/login")
+
+    response = web.post("/login/shareok", data={"user": "j", "password": "pw"})
+
+    assert response.status_code == 502
+    assert fake_dspace.closed, "the client was left open"
+
+
+def test_repeated_failures_are_rate_limited(web, app, fake_dspace) -> None:
     fake_dspace.login_ok = False
     for _ in range(app.state.settings.login_rate_limit_attempts):
-        web.post(
-            "/login/shareok",
-            data={"user": "j", "password": "x"},
-            headers={"X-Forwarded-For": header},
-        )
+        web.post("/login/shareok", data={"user": "j", "password": "x"})
 
-    blocked = web.post(
-        "/login/shareok", data={"user": "j", "password": "x"}, headers={"X-Forwarded-For": header}
-    )
-    other_client = web.post(
-        "/login/shareok",
-        data={"user": "j", "password": "x"},
-        headers={"X-Forwarded-For": "9.9.9.9"},
-    )
+    blocked = web.post("/login/shareok", data={"user": "j", "password": "x"})
 
     assert blocked.status_code == 429
-    assert other_client.status_code == 401, "a different client is unaffected"
+
+
+@pytest.mark.parametrize("header", ["1.2.3.4", "1.2.3.4, 10.0.0.1", "9.9.9.9"])
+def test_a_forged_forwarded_for_does_not_reset_the_rate_limit(
+    web, app, fake_dspace, header: str
+) -> None:
+    """X-Forwarded-For is attacker-controlled, so it must not key the limiter.
+
+    nginx *appends* to this header (`$proxy_add_x_forwarded_for`), so whatever the
+    client sent stays in it. If any of those entries chose the bucket, rotating the
+    header would buy unlimited password attempts -- and spoofing someone else's
+    address would lock them out of signing in.
+    """
+    fake_dspace.login_ok = False
+    for _ in range(app.state.settings.login_rate_limit_attempts):
+        web.post("/login/shareok", data={"user": "j", "password": "x"})
+
+    still_blocked = web.post(
+        "/login/shareok",
+        data={"user": "j", "password": "x"},
+        headers={"X-Forwarded-For": header},
+    )
+
+    assert still_blocked.status_code == 429

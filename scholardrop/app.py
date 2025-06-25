@@ -26,8 +26,13 @@ from scholardrop.ratelimit import RateLimiter
 from scholardrop.request_log import RequestContextMiddleware, configure_logging
 from scholardrop.routes import auth, browse, drafts, home, review, submit
 from scholardrop.routes.deps import InstanceNotFound, NeedsLogin, is_htmx, page_context
-from scholardrop.security import SameOriginMiddleware
-from scholardrop.session import InMemorySessionStore, SessionCookie, SessionStore
+from scholardrop.security import SameOriginMiddleware, SecurityHeadersMiddleware
+from scholardrop.session import (
+    InMemorySessionStore,
+    SessionCookie,
+    SessionStore,
+    SlidingSessionMiddleware,
+)
 from scholardrop.settings import Settings, load_settings
 from scholardrop.submission.definition import ConfigCache
 from scholardrop.submission.jobs import ExtractionJobs, Extractor, run_extraction
@@ -79,14 +84,18 @@ def create_app(
     app.state.extractions = ExtractionJobs()
     # Repository configuration (submission forms, vocabularies) -- shared, since
     # it is the same for every user of an instance.
-    app.state.form_configs = ConfigCache()
+    app.state.form_configs = ConfigCache(settings.config_cache_ttl_seconds)
     app.state.login_limiter = RateLimiter(
         settings.login_rate_limit_attempts, settings.login_rate_limit_window_seconds
     )
 
     # Outermost first: every line logged during a request carries its id, and a
-    # forged cross-site POST is refused before any route sees it.
+    # forged cross-site POST is refused before any route sees it. The cookie
+    # refresh is innermost -- it reads the session the route just used.
+    app.add_middleware(SlidingSessionMiddleware)
     app.add_middleware(SameOriginMiddleware)
+    # Outside the origin check, so even a refused request carries the headers.
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestContextMiddleware)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -267,19 +276,40 @@ async def _warm_extraction(app: FastAPI) -> None:
 
 
 async def _sweep(app: FastAPI) -> None:
-    """Drop expired sessions and stale rate-limit entries on a timer."""
+    """Drop expired sessions and stale rate-limit entries on a timer.
+
+    One iteration's failure must not end the loop: this task is the only thing
+    that removes uploaded theses nobody cleaned up, and if it dies silently they
+    sit on disk until the process is restarted. So a bad sweep costs one cycle
+    and a log line -- an unreadable upload directory, a filesystem that went away
+    under a shared mount -- and the next tick tries again.
+    """
     settings: Settings = app.state.settings
     sessions: SessionStore = app.state.sessions
     while True:
         await asyncio.sleep(settings.session_sweep_interval_seconds)
-        removed = sessions.sweep()
-        app.state.login_limiter.sweep()
-        # An extraction result outlives its session by nothing: once the session
-        # is gone, no one can ask for it again.
-        app.state.extractions.sweep(settings.session_ttl_seconds)
-        # The backstop for uploads nobody cleaned up -- an abandoned tab, a crash
-        # between upload and deposit (DESIGN.md §8: purged on session end/TTL).
-        sweep_uploads(settings.upload_dir, settings.upload_ttl_seconds)
+        try:
+            removed = sessions.sweep()
+            app.state.login_limiter.sweep()
+            # An extraction result outlives its session by nothing: once the session
+            # is gone, no one can ask for it again. Ask the store which sessions are
+            # still live rather than going on age, or a user who took longer than the
+            # TTL to open the review form would lose their pre-fill with no notice.
+            app.state.extractions.sweep(
+                settings.session_ttl_seconds,
+                owner_is_live=lambda owner: sessions.get(owner, touch=False) is not None,
+            )
+            # Expired repository configuration. Reads drop stale entries anyway;
+            # this keeps ones nobody asks for again from sitting there.
+            app.state.form_configs.sweep()
+            # The backstop for uploads nobody cleaned up -- an abandoned tab, a crash
+            # between upload and deposit (DESIGN.md §8: purged on session end/TTL).
+            sweep_uploads(settings.upload_dir, settings.upload_ttl_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception("sweep failed, continuing (%s: %s)", type(exc).__name__, exc)
+            continue
         if removed:
             log.info("swept %d expired session(s)", removed)
 
