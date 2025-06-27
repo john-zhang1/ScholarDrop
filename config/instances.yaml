@@ -8,12 +8,12 @@
 instances:
   shareok:
     name: SHAREOK
-    base_url: https://shareok.org/server
+    base_url: https://test.shareok.org/server
     mapping_profile: shareok-etd
     # Shown on the access-denied screen so a user knows who to ask (DESIGN.md §4).
     contact_email: shareok@ou.edu
     # llm | heuristic -- per-instance extraction tier (DESIGN.md §5).
-    extraction: llm
+    extraction: heuristic
 
   DSpace 9.2:
     name: DSpace 9.2
