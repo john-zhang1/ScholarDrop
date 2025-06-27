@@ -36,7 +36,12 @@ def test_healthz_reports_loaded_config(client: TestClient) -> None:
     response = client.get("/healthz")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "instances": ["shareok"], "sessions": 0}
+    # Derived from the loaded registry, not a frozen list: healthz's job is to
+    # report whatever config/instances.yaml holds, so adding an instance there
+    # must not fail this test.
+    expected = sorted(client.app.state.registry.instances)
+    assert response.json() == {"status": "ok", "instances": expected, "sessions": 0}
+    assert "shareok" in expected
 
 
 def test_static_assets_are_served(client: TestClient) -> None:

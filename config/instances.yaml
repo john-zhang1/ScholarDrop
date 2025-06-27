@@ -14,3 +14,37 @@ instances:
     contact_email: shareok@ou.edu
     # llm | heuristic -- per-instance extraction tier (DESIGN.md §5).
     extraction: llm
+
+  DSpace 9.2:
+    name: DSpace 9.2
+    base_url: https://ds7up.dev.shareok.org/server
+    mapping_profile: shareok-etd
+    contact_email: shareok@ou.edu
+    # Heuristic here: tier 2 costs no API calls and skips the cold grammar
+    # compile. Switch to llm to exercise tier 1 against the local instance.
+    extraction: heuristic
+
+  local:
+    name: Local DSpace
+    base_url: http://127.0.0.1:8080/server
+    mapping_profile: shareok-etd
+    contact_email: shareok@ou.edu
+    # Heuristic here: tier 2 costs no API calls and skips the cold grammar
+    # compile. Switch to llm to exercise tier 1 against the local instance.
+    extraction: heuristic
+
+  # The DSpace 9.2 on this VM. The only target where the sd-admin@test.invalid /
+  # sd-user@test.invalid accounts and the `traditional` submission definition
+  # exist -- and the only one where depositing does not write a real item into
+  # SHAREOK. Sign in at /login/local.
+  # local Mac:
+  #   name: Local DSpace
+  #   # VM "Alma DS9" (Parallels Shared network). From the macOS host, localhost is
+  #   # the mac, not the VM -- reach DSpace at the VM's IP. Requires port 8080 open
+  #   # on the VM (firewalld) and Tomcat bound to 0.0.0.0.
+  #   base_url: http://10.211.55.23:8080/server
+  #   mapping_profile: shareok-etd
+  #   contact_email: shareok@ou.edu
+  #   # Heuristic here: tier 2 costs no API calls and skips the cold grammar
+  #   # compile. Switch to llm to exercise tier 1 against the local instance.
+  #   extraction: heuristic
