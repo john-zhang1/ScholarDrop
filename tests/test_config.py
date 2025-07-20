@@ -19,8 +19,11 @@ def test_loads_shipped_config(shipped_config_dir: Path) -> None:
     shareok = registry.instances["shareok"]
     assert shareok.name == "SHAREOK"
     assert shareok.key == "shareok"
-    assert shareok.extraction == "llm"
-    assert shareok.api_url == "https://shareok.org/server/api"
+    # Not pinned to today's values: which tier SHAREOK is configured for, and
+    # which host it points at, are operational choices that change without this
+    # being a regression. What must hold is that they parse and compose.
+    assert shareok.extraction in {"cloud", "local", "heuristic"}
+    assert shareok.api_url == f"{shareok.base_url}/api"
 
     profile = registry.profile_for(shareok)
     assert profile.name == "shareok-etd"

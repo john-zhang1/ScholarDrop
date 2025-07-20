@@ -202,3 +202,70 @@ def test_a_failing_extractor_does_not_fail_the_upload(
     job = app.state.extractions.get(session.id, "42")
     assert job.state == "failed"
     assert job.error and "Extraction failed" in job.error
+
+
+# ---- restricted content (DESIGN.md §5, Phase 3b) ---------------------------
+
+
+def cloud_instance(app):
+    """Put the session's instance on the cloud tier, where the choice matters."""
+    app.state.registry.instances["shareok"].extraction = "cloud"
+
+
+def test_the_restricted_checkbox_is_offered_on_a_cloud_instance(with_collection, app) -> None:
+    cloud_instance(app)
+
+    response = with_collection.get("/submit")
+
+    assert 'name="restricted"' in response.text
+    assert "restricted or embargoed content" in response.text
+
+
+def test_no_checkbox_where_the_document_never_leaves_anyway(with_collection, app) -> None:
+    """Offering the choice on a heuristic instance would be theatre."""
+    app.state.registry.instances["shareok"].extraction = "heuristic"
+
+    response = with_collection.get("/submit")
+
+    assert 'name="restricted"' not in response.text
+
+
+def test_ticking_it_forces_local_extraction(
+    with_collection, app, fake_extractor, pdf_bytes
+) -> None:
+    cloud_instance(app)
+
+    response = with_collection.post(
+        "/submit",
+        files={"file": ("thesis.pdf", pdf_bytes, "application/pdf")},
+        data={"restricted": "true"},
+        headers=HTMX,
+    )
+
+    assert response.status_code == 200
+    _path, kwargs = fake_extractor.calls[0]
+    assert kwargs["force_local"] is True
+
+
+def test_an_ordinary_upload_does_not_force_local(
+    with_collection, fake_extractor, pdf_bytes
+) -> None:
+    upload(with_collection, pdf_bytes)
+
+    _path, kwargs = fake_extractor.calls[0]
+    assert kwargs["force_local"] is False
+
+
+def test_the_ticked_box_survives_a_rejected_upload(with_collection, app) -> None:
+    """Re-render after an error must not silently untick a privacy choice."""
+    cloud_instance(app)
+
+    response = with_collection.post(
+        "/submit",
+        files={"file": ("notes.pdf", b"GIF89a not a pdf", "application/pdf")},
+        data={"restricted": "true"},
+        headers=HTMX,
+    )
+
+    assert response.status_code == 400
+    assert "checked" in response.text

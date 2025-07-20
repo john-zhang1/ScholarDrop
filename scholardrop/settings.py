@@ -65,6 +65,33 @@ class Settings(BaseSettings):
     # request per process start.
     extraction_warm_on_startup: bool = True
 
+    # Tier 1, local backend (DESIGN.md §5, "Tier 1 backends and the embargo
+    # case"). This is where an embargoed document's text goes: a model on this
+    # box, bound to loopback, so nothing leaves the machine. Blank either of the
+    # first two and the local backend is unconfigured -- a submission marked
+    # restricted then falls back to heuristics rather than to the cloud.
+    local_llm_base_url: str = "http://127.0.0.1:11434"
+    local_llm_model: str = "qwen3:4b-instruct"
+    # ollama -> {base}/api/chat with the schema in `format`; openai ->
+    # {base}/v1/chat/completions with response_format.json_schema (vLLM,
+    # llama.cpp server, LM Studio).
+    local_llm_dialect: Literal["ollama", "openai"] = "ollama"
+    # A Q4 4B model on a CPU-only box takes 30-90s for a typical ETD, and the
+    # first call also loads the weights. Long, because the alternative to waiting
+    # is silently degrading an embargoed submission to heuristics.
+    local_llm_timeout_seconds: float = 300.0
+    # Ollama's default context is 4k and it drops the *tail* of a longer prompt --
+    # which is exactly where an ETD's signature page is. Must comfortably hold
+    # local_llm_max_chars (~4 chars/token) plus the answer.
+    local_llm_num_ctx: int = 8192
+    # Input budget for the local backend, spent deliberately across title page,
+    # abstract, and signature tail (llm._budgeted_text) rather than head-first.
+    local_llm_max_chars: int = 12_000
+    # Load the local weights at startup when an instance is configured for it,
+    # for the same reason the cloud grammar is warmed: no submission should be
+    # the request that pays a one-off cost.
+    local_llm_warm_on_startup: bool = True
+
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 

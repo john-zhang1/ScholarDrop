@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from scholardrop.dspace import DSpaceError, DSpaceForbidden
@@ -46,11 +46,26 @@ async def submit(request: Request) -> Response:
         collection_name=session.data.get("collection_name"),
         collection_handle=session.data.get("collection_handle"),
         max_bytes=request.app.state.settings.upload_max_bytes,
+        offer_restricted=offers_restricted(request),
     )
 
 
+def offers_restricted(request: Request) -> bool:
+    """Show the restricted-content checkbox only where it changes something.
+
+    On an instance already configured for heuristic or local extraction the
+    document never goes anywhere, so offering the choice would be theatre.
+    """
+    session = require_session(request)
+    return session_instance(request, session).extraction == "cloud"
+
+
 @router.post("/submit", response_class=HTMLResponse)
-async def upload(request: Request, file: UploadFile | None = File(None)) -> Response:
+async def upload(
+    request: Request,
+    file: UploadFile | None = File(None),
+    restricted: bool = Form(False),
+) -> Response:
     session = require_session(request)
     if not session.collection_uuid:
         return RedirectResponse("/browse", status_code=303)
@@ -59,7 +74,13 @@ async def upload(request: Request, file: UploadFile | None = File(None)) -> Resp
     instance = session_instance(request, session)
 
     def rejected(message: str, status: int = 400) -> HTMLResponse:
-        response = render(request, "partials/upload_form.html", error=message)
+        response = render(
+            request,
+            "partials/upload_form.html",
+            error=message,
+            restricted=restricted,
+            offer_restricted=instance.extraction == "cloud",
+        )
         response.status_code = status
         return response
 
@@ -127,11 +148,20 @@ async def upload(request: Request, file: UploadFile | None = File(None)) -> Resp
         session.id,
         item.id,
         request.app.state.extractor(
-            stored.path, instance=instance, settings=settings, profile=profile
+            stored.path,
+            instance=instance,
+            settings=settings,
+            profile=profile,
+            force_local=restricted,
         ),
         filename=stored.filename,
     )
-    log.info("workspaceitem %s created; extracting %s", item.id, stored.filename)
+    log.info(
+        "workspaceitem %s created; extracting %s%s",
+        item.id,
+        stored.filename,
+        " (restricted: local processing only)" if restricted else "",
+    )
 
     if not is_htmx(request):
         # No JavaScript: skip the progress state and let /review report on the

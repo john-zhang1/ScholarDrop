@@ -22,6 +22,7 @@ from scholardrop.dspace import (
     DSpaceUnavailable,
 )
 from scholardrop.extract import llm
+from scholardrop.extract.backends import local_is_configured
 from scholardrop.ratelimit import RateLimiter
 from scholardrop.request_log import RequestContextMiddleware, configure_logging
 from scholardrop.routes import auth, browse, drafts, home, review, submit
@@ -237,6 +238,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     background = [asyncio.create_task(_sweep(app))]
     if _should_warm_extraction(app):
         background.append(asyncio.create_task(_warm_extraction(app)))
+    if _should_warm_local(app):
+        background.append(asyncio.create_task(_warm_local(app)))
     try:
         yield
     finally:
@@ -248,14 +251,50 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _should_warm_extraction(app: FastAPI) -> bool:
-    """Only worth a request if tier 1 can actually run for someone."""
+    """Only worth a request if the cloud tier can actually run for someone."""
     settings: Settings = app.state.settings
     registry: Registry = app.state.registry
     return bool(
         settings.extraction_warm_on_startup
         and settings.anthropic_api_key
-        and any(instance.extraction == "llm" for instance in registry.instances.values())
+        and any(instance.extraction == "cloud" for instance in registry.instances.values())
     )
+
+
+def _should_warm_local(app: FastAPI) -> bool:
+    """Warm the local weights when anyone here can reach them.
+
+    That is any instance configured for local extraction, and also any cloud
+    instance -- a submitter there can tick "restricted content" at upload and land
+    on the local backend without warning (DESIGN.md §5).
+    """
+    settings: Settings = app.state.settings
+    registry: Registry = app.state.registry
+    return bool(
+        settings.local_llm_warm_on_startup
+        and local_is_configured(settings)
+        and any(
+            instance.extraction in {"local", "cloud"} for instance in registry.instances.values()
+        )
+    )
+
+
+async def _warm_local(app: FastAPI) -> None:
+    """Load the local model into RAM before an embargoed submission waits for it."""
+    settings: Settings = app.state.settings
+    try:
+        await llm.warm_local(settings)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # nothing may be listening; that is a log line, not a fault
+        log.info(
+            "local model warm-up did not complete (%s: %s); "
+            "restricted submissions will fall back to heuristics if it stays down",
+            type(exc).__name__,
+            exc,
+        )
+    else:
+        log.info("local model warm-up complete (%s)", settings.local_llm_model)
 
 
 async def _warm_extraction(app: FastAPI) -> None:

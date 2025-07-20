@@ -55,7 +55,15 @@ class Instance(BaseModel):
     base_url: str
     mapping_profile: str
     contact_email: str | None = None
-    extraction: Literal["llm", "heuristic"] = "llm"
+    # Which tier 1 backend this repository's documents may go to (DESIGN.md §5):
+    # cloud (Claude), local (a model on this box, zero egress), or heuristic (no
+    # model at all). `llm` is the pre-3b spelling of `cloud` and still parses.
+    extraction: Literal["cloud", "local", "heuristic"] = "cloud"
+
+    @field_validator("extraction", mode="before")
+    @classmethod
+    def _accept_legacy_llm(cls, v: object) -> object:
+        return "cloud" if v == "llm" else v
 
     @field_validator("base_url")
     @classmethod

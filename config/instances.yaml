@@ -12,7 +12,10 @@ instances:
     mapping_profile: shareok-etd
     # Shown on the access-denied screen so a user knows who to ask (DESIGN.md §4).
     contact_email: shareok@ou.edu
-    # llm | heuristic -- per-instance extraction tier (DESIGN.md §5).
+    # cloud | local | heuristic -- which tier 1 backend this repository's
+    # documents may go to (DESIGN.md §5; `llm` is the old spelling of `cloud`).
+    # A submitter can narrow it further per submission with the upload page's
+    # "restricted content" checkbox, which forces the local model.
     extraction: heuristic
 
   DSpace 9.2:
@@ -21,7 +24,8 @@ instances:
     mapping_profile: shareok-etd
     contact_email: shareok@ou.edu
     # Heuristic here: tier 2 costs no API calls and skips the cold grammar
-    # compile. Switch to llm to exercise tier 1 against the local instance.
+    # compile. Switch to cloud (or local, see docs/local-llm.md) to exercise
+    # tier 1 against this instance.
     extraction: heuristic
 
   local:
@@ -30,7 +34,8 @@ instances:
     mapping_profile: shareok-etd
     contact_email: shareok@ou.edu
     # Heuristic here: tier 2 costs no API calls and skips the cold grammar
-    # compile. Switch to llm to exercise tier 1 against the local instance.
+    # compile. Switch to cloud (or local, see docs/local-llm.md) to exercise
+    # tier 1 against this instance.
     extraction: heuristic
 
   # The DSpace 9.2 on this VM. The only target where the sd-admin@test.invalid /

@@ -9,6 +9,19 @@
     <span class="dropzone-hint">Drop a PDF here, or choose a file</span>
     <input id="file" type="file" name="file" accept="application/pdf,.pdf" required>
   </label>
+  {% if offer_restricted %}
+  {# DESIGN.md §5: this narrows where the document may be read, never widens it.
+     Ticked, the text is read by a model on this server and goes nowhere else. #}
+  <label class="check" for="restricted">
+    <input id="restricted" type="checkbox" name="restricted" value="true"
+           {% if restricted %}checked{% endif %}>
+    <span>
+      This document contains restricted or embargoed content — process it on this
+      server only.
+      <span class="quiet">Reading it takes longer and picks up a little less.</span>
+    </span>
+  </label>
+  {% endif %}
   <div class="actions">
     <button class="button" type="submit">Upload and read</button>
     <span class="quiet">PDF only{% if max_bytes %}, up to {{ (max_bytes / 1024 / 1024) | round | int }} MB{% endif %}.</span>

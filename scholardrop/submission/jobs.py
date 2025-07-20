@@ -49,9 +49,16 @@ async def run_extraction(
     instance: Instance,
     settings: Settings,
     profile: MappingProfile,
+    force_local: bool = False,
 ) -> ExtractionResult:
-    """Read the PDF, extract, and translate the result into metadata fields."""
-    metadata, _document = await extract_from_pdf(path, instance=instance, settings=settings)
+    """Read the PDF, extract, and translate the result into metadata fields.
+
+    `force_local` is the submitter's "restricted content" answer, carried from the
+    upload form: it keeps the document off any network (DESIGN.md §5).
+    """
+    metadata, _document = await extract_from_pdf(
+        path, instance=instance, settings=settings, force_local=force_local
+    )
     return ExtractionResult(metadata=metadata, mapped=map_metadata(metadata, profile))
 
 

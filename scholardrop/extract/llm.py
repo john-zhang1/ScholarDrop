@@ -1,10 +1,19 @@
-"""Uses structured outputs (`messages.parse` with a Pydantic schema) rather than
-tool-use-as-schema: same guarantee that the response validates, less plumbing, and
-no tool-call round trip to unpack.
+"""Tier 1 extraction: a model with a forced output schema (DESIGN.md §5).
 
-The prompt's whole job is to stop the model being helpful. An invented advisor or a
-paraphrased abstract is worse than an empty field, because the human reviewing the
-form has no way to tell a confident guess from a real reading of the document.
+This module owns the *task*: the schema, the prompts, the input budget, the retry
+policy, and the translation into `ExtractedMetadata`. Where the model runs is
+`backends.py`'s business -- cloud (Claude) or a local open-weight model for
+embargoed documents. The two paths differ only in the backend object; every rule
+below applies identically to both.
+
+Structured outputs, not free text: the response is guaranteed to validate against
+`LlmExtraction`, server-side, by constrained decoding. That guarantee is what lets
+a 4B local model stand in for Claude at all -- what is left to get wrong is a
+field's *content*, which the confidence flags and the review step handle.
+
+The prompt's whole job is to stop the model being helpful. An invented advisor or
+a paraphrased abstract is worse than an empty field, because the human reviewing
+the form has no way to tell a confident guess from a real reading of the document.
 
 Nothing here is a hard dependency of the flow: on any failure the caller falls back
 to tier 2 (see pipeline.py). Extraction never blocks a submission.
@@ -17,33 +26,47 @@ import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from scholardrop.extract.backends import (
+    MAX_TOKENS,
+    WARM_MAX_TOKENS,
+    AnthropicBackend,
+    LLMBackend,
+    LlmUnavailable,
+    local_backend,
+)
 from scholardrop.extract.models import ExtractedMetadata, SourceTier, items, text
 from scholardrop.extract.reader import PdfDocument
 from scholardrop.settings import Settings
 
 log = logging.getLogger("scholardrop.extract")
 
+__all__ = [
+    "MAX_TOKENS",
+    "WARM_MAX_TOKENS",
+    "LlmExtraction",
+    "LlmUnavailable",
+    "extract",
+    "to_metadata",
+    "warm_grammar",
+]
+
 # Tier 1 asserts a single confidence: the model read the document, or it said
 # nothing. Per-field confidence from the model itself would be self-reported and
 # not worth much.
 LLM_CONFIDENCE = 0.85
-MAX_TOKENS = 4096
+# A local 4B model is a weaker reader than Claude, and the review form's job is to
+# tell a librarian where to look. Still above LOW_CONFIDENCE (0.6) -- it read the
+# document -- but visibly not the same claim.
+LOCAL_LLM_CONFIDENCE = 0.7
 # Front matter plus tail; enough for any ETD's title page, committee page, and
 # abstract without paying for the whole thesis.
 MAX_CHARS = 60_000
-# The warm-up call only exists to compile the grammar; it needs room for a
-# schema-shaped answer of nulls and nothing more.
-WARM_MAX_TOKENS = 256
-
-
-class LlmUnavailable(Exception):
-    """No API key, or the API could not be used. Caller falls back to tier 2."""
 
 
 class LlmExtraction(BaseModel):
-    """The schema Claude must fill. Flat and neutral, exactly like the model."""
+    """The schema the model must fill. Flat and neutral, exactly like the model."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -128,10 +151,30 @@ heads, page numbers, and boilerplate. If the text is unusable, return nulls and 
 empty lists rather than reaching.
 """
 
+# The small-model prompt. Same rules, a third of the words: with the schema
+# enforced by constrained decoding there is nothing to say about the output shape,
+# and a 4B model follows six short imperatives better than five paragraphs about
+# why they matter. Every rule that survives is one a gate run caught it breaking.
+COMPACT_SYSTEM_PROMPT = """\
+Extract bibliographic metadata from this document for a library catalogue.
 
-def build_prompt(document: PdfDocument) -> str:
+- Copy from the text. Never guess, infer, or complete. Use null or [] for anything \
+the document does not state.
+- Copy the abstract word for word. Never summarise or shorten it. No abstract in \
+the text means null.
+- Copy names as printed, in the printed order ("Doe, Jane" stays "Doe, Jane"). \
+Drop "Dr." and trailing roles like ", Chair".
+- Advisor, chair, or director -> advisor. Everyone else on the committee -> \
+committee_members. Never the same person in both.
+- The text is front matter and the tail of a PDF: noisy, possibly out of order. \
+Ignore page numbers and running heads.
+- Unusable text means nulls and empty lists, not a best effort.
+"""
+
+
+def build_prompt(document: PdfDocument, *, max_chars: int = MAX_CHARS) -> str:
     """The user turn: the document text, plus what little context we have."""
-    body = document.text_for_llm[:MAX_CHARS]
+    body = _budgeted_text(document, max_chars)
     facts = [f"page count: {document.page_count}"]
     if title := document.docinfo.get("title"):
         facts.append(f"PDF Title field: {title!r} (may be wrong or a filename)")
@@ -145,50 +188,92 @@ def build_prompt(document: PdfDocument) -> str:
     )
 
 
+_ABSTRACT_HEADING = re.compile(r"^[ \t]*abstract\b[:.]?[ \t]*$", re.IGNORECASE | re.MULTILINE)
+# What a small context has to keep, in the order it earns its space: the title
+# page, the abstract, and the signature page in the tail.
+_TITLE_PAGE_SHARE = 0.45
+_TAIL_SHARE = 0.25
+
+
+def _budgeted_text(document: PdfDocument, max_chars: int) -> str:
+    """Fit the document to a context window without losing the three useful parts.
+
+    Truncating `text_for_llm` head-first is fine at 60k chars and wrong at 8k: the
+    committee page of an ETD is in the *tail*, and the abstract is often past page
+    3. So spend the budget deliberately -- title page, abstract block, signature
+    tail -- rather than on whichever pages happened to come first.
+    """
+    whole = document.text_for_llm
+    if len(whole) <= max_chars:
+        return whole
+
+    front, back = document.front_text, document.back_text
+    tail_budget = int(max_chars * _TAIL_SHARE) if back.strip() else 0
+    front_budget = max_chars - tail_budget
+
+    head_budget = (
+        int(front_budget * _TITLE_PAGE_SHARE) if len(front) > front_budget else front_budget
+    )
+    head = front[:head_budget]
+
+    abstract = ""
+    if (match := _ABSTRACT_HEADING.search(front, head_budget)) is not None:
+        abstract = front[match.start() : match.start() + (front_budget - head_budget)]
+
+    parts = [head]
+    if abstract:
+        parts.append(f"[... skipped ...]\n\n{abstract}")
+    if tail_budget:
+        parts.append(f"[... end of document ...]\n\n{back[-tail_budget:]}")
+    return "\n\n".join(parts)
+
+
 async def extract(
-    document: PdfDocument, settings: Settings, *, client: Any | None = None
+    document: PdfDocument,
+    settings: Settings,
+    *,
+    client: Any | None = None,
+    backend: LLMBackend | None = None,
 ) -> ExtractedMetadata:
-    """Ask Claude for the metadata. Raises LlmUnavailable for the caller to handle."""
+    """Ask the model for the metadata. Raises LlmUnavailable for the caller to handle.
+
+    `backend` selects where it runs (default: Claude). `client` is the Anthropic
+    SDK seam, kept for callers and tests that only ever meant the cloud path.
+    """
     if not document.has_text:
         raise LlmUnavailable("PDF has no extractable text; nothing to send")
 
-    api_client = client or _default_client(settings)
-    response = await _parse_with_retry(api_client, build_prompt(document), settings)
-
-    if getattr(response, "stop_reason", None) == "refusal":
-        raise LlmUnavailable("the model declined to process this document")
-
-    parsed = getattr(response, "parsed_output", None)
-    if parsed is None:
-        raise LlmUnavailable("response contained no parsed output")
-
-    log.info(
-        "tier 1 extraction ok (model=%s, in=%s, out=%s)",
-        getattr(response, "model", settings.anthropic_model),
-        getattr(getattr(response, "usage", None), "input_tokens", "?"),
-        getattr(getattr(response, "usage", None), "output_tokens", "?"),
+    backend = backend or AnthropicBackend(settings, client=client)
+    is_local = getattr(backend, "local", False)
+    prompt = build_prompt(
+        document, max_chars=settings.local_llm_max_chars if is_local else MAX_CHARS
     )
-    return to_metadata(parsed)
+    system = COMPACT_SYSTEM_PROMPT if is_local else SYSTEM_PROMPT
+
+    raw = await _extract_with_retry(backend, system, prompt, settings)
+    try:
+        parsed = LlmExtraction.model_validate(raw)
+    except ValidationError as exc:
+        # Constrained decoding is supposed to make this unreachable; a server
+        # ignoring the schema is a configuration failure, not a bad document.
+        raise LlmUnavailable(f"{backend.label} returned output off-schema: {_brief(exc)}") from exc
+
+    return to_metadata(parsed, confidence=LOCAL_LLM_CONFIDENCE if is_local else LLM_CONFIDENCE)
+
+
+async def warm(backend: LLMBackend) -> None:
+    """Pay a backend's first-call cost now rather than during a submission."""
+    await backend.warm()
 
 
 async def warm_grammar(settings: Settings, *, client: Any | None = None) -> None:
-    """Compile `LlmExtraction`'s grammar before a real submission needs it.
+    """Compile the cloud backend's grammar at startup (see AnthropicBackend.warm)."""
+    await AnthropicBackend(settings, client=client).warm()
 
-    The first `parse` call with a given output schema pays to compile its grammar
-    server-side. Observed on this schema: ~105s cold and a 400 'Grammar compilation
-    timed out' when it does not make it, against ~17s once the grammar is cached.
-    A submission should never be the request that discovers this, so a throwaway
-    call at startup takes the hit instead. Raises for the caller to log.
-    """
-    api_client = client or _default_client(settings)
-    await api_client.messages.parse(
-        model=settings.anthropic_model,
-        max_tokens=WARM_MAX_TOKENS,
-        system=SYSTEM_PROMPT,
-        output_config={"effort": settings.anthropic_effort},
-        messages=[{"role": "user", "content": WARM_PROMPT}],
-        output_format=LlmExtraction,
-    )
+
+async def warm_local(settings: Settings) -> None:
+    """Load the local model into RAM at startup, if one is configured."""
+    await local_backend(settings).warm()
 
 
 WARM_PROMPT = (
@@ -222,7 +307,8 @@ def _is_retryable(exc: Exception) -> bool:
             return True
         if status == 400:
             return bool(_RETRYABLE_MESSAGE.search(str(exc)))
-        # 401/403 (key), 413 (too big), 422 (schema) -- all fail identically twice.
+        # 401/403 (key), 404 (model not pulled), 413 (too big), 422 (schema) --
+        # all fail identically twice.
         return False
 
     # No HTTP status at all: the request did not complete. Connection resets and
@@ -232,21 +318,20 @@ def _is_retryable(exc: Exception) -> bool:
     return bool(_RETRYABLE_MESSAGE.search(str(exc)))
 
 
-async def _parse_with_retry(api_client: Any, prompt: str, settings: Settings) -> Any:
-    """Call the API, retrying the failures where that is not pointless."""
+async def _extract_with_retry(
+    backend: LLMBackend, system: str, prompt: str, settings: Settings
+) -> dict[str, Any]:
+    """Call the backend, retrying the failures where that is not pointless."""
     attempts = max(1, settings.extraction_retry_attempts)
     last: Exception | None = None
 
     for attempt in range(1, attempts + 1):
         try:
-            return await api_client.messages.parse(
-                model=settings.anthropic_model,
-                max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                output_config={"effort": settings.anthropic_effort},
-                messages=[{"role": "user", "content": prompt}],
-                output_format=LlmExtraction,
-            )
+            return await backend.extract(system=system, prompt=prompt, schema=LlmExtraction)
+        except LlmUnavailable:
+            # The backend already decided this is not worth asking twice (no key,
+            # nothing listening, a refusal). Its message is the honest one.
+            raise
         except Exception as exc:  # network, auth, rate limit -- classified below
             last = exc
             if attempt >= attempts or not _is_retryable(exc):
@@ -265,33 +350,30 @@ async def _parse_with_retry(api_client: Any, prompt: str, settings: Settings) ->
     raise LlmUnavailable(f"extraction request failed: {type(last).__name__}: {last}") from last
 
 
-def to_metadata(parsed: LlmExtraction) -> ExtractedMetadata:
+def to_metadata(parsed: LlmExtraction, *, confidence: float = LLM_CONFIDENCE) -> ExtractedMetadata:
     """Wrap the flat schema in provenance-carrying fields."""
     tier = SourceTier.LLM
     advisor = (parsed.advisor or "").strip()
     # Rule 4 says never list the advisor twice; enforce it rather than trusting it.
     members = [m for m in parsed.committee_members if m.strip() and m.strip() != advisor]
     return ExtractedMetadata(
-        title=text(parsed.title, LLM_CONFIDENCE, tier),
-        authors=items(parsed.authors, LLM_CONFIDENCE, tier),
-        advisor=text(advisor, LLM_CONFIDENCE, tier),
-        committee_members=items(members, LLM_CONFIDENCE, tier),
-        keywords=items(parsed.keywords, LLM_CONFIDENCE, tier),
-        abstract=text(parsed.abstract, LLM_CONFIDENCE, tier),
-        date_issued=text(parsed.date_issued, LLM_CONFIDENCE, tier),
-        degree=text(parsed.degree, LLM_CONFIDENCE, tier),
-        department=text(parsed.department, LLM_CONFIDENCE, tier),
-        language=text(parsed.language, LLM_CONFIDENCE, tier),
-        doc_type=text(parsed.doc_type, LLM_CONFIDENCE, tier),
+        title=text(parsed.title, confidence, tier),
+        authors=items(parsed.authors, confidence, tier),
+        advisor=text(advisor, confidence, tier),
+        committee_members=items(members, confidence, tier),
+        keywords=items(parsed.keywords, confidence, tier),
+        abstract=text(parsed.abstract, confidence, tier),
+        date_issued=text(parsed.date_issued, confidence, tier),
+        degree=text(parsed.degree, confidence, tier),
+        department=text(parsed.department, confidence, tier),
+        language=text(parsed.language, confidence, tier),
+        doc_type=text(parsed.doc_type, confidence, tier),
         tier_used=tier,
     )
 
 
-def _default_client(settings: Settings) -> Any:
-    if not settings.anthropic_api_key:
-        raise LlmUnavailable("no Anthropic API key configured")
-    try:
-        from anthropic import AsyncAnthropic
-    except ImportError as exc:  # pragma: no cover - dependency is declared
-        raise LlmUnavailable(f"anthropic SDK unavailable: {exc}") from exc
-    return AsyncAnthropic(api_key=settings.anthropic_api_key)
+def _brief(exc: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(p) for p in err['loc']) or '(root)'}: {err['msg']}"
+        for err in exc.errors()[:3]
+    )

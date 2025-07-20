@@ -1,8 +1,15 @@
 """Tier selection and fallback (DESIGN.md §5).
 
-The rule that matters: **extraction never blocks a submission**. If tier 1 is
-unavailable or errors, tier 2 runs; if that finds nothing, the user gets an honest
-empty form with a notice. A failure here is never a dead end.
+Two rules, and they are not the same rule:
+
+1. **Extraction never blocks a submission.** If tier 1 is unavailable or errors,
+   tier 2 runs; if that finds nothing, the user gets an honest empty form with a
+   notice. A failure here is never a dead end.
+2. **`force_local` is a promise about where the bytes go.** A submission the user
+   marked as restricted is extracted by a model on this box or by nothing at all.
+   It never falls back to the cloud -- not when the local server is down, not
+   when the instance is configured for cloud, not ever. The fallback for a
+   restricted document is heuristics, which never leave the process.
 
 Reading and parsing a PDF is CPU-bound, and ScholarDrop is one process with one
 event loop (DESIGN.md §2). Run on the loop, parsing a large scanned thesis stalls
@@ -19,6 +26,7 @@ from pathlib import Path
 
 from scholardrop.config import Instance
 from scholardrop.extract import heuristic, llm
+from scholardrop.extract.backends import LLMBackend, LlmUnavailable, select_backend
 from scholardrop.extract.models import ExtractedMetadata, SourceTier
 from scholardrop.extract.reader import PdfDocument, read_pdf
 from scholardrop.settings import Settings
@@ -32,11 +40,16 @@ async def extract_from_pdf(
     instance: Instance,
     settings: Settings,
     client: object | None = None,
+    force_local: bool = False,
 ) -> tuple[ExtractedMetadata, PdfDocument]:
     """Read a PDF and extract its metadata with the instance's configured tier."""
     document = await asyncio.to_thread(read_pdf, source)
     metadata = await extract_from_document(
-        document, instance=instance, settings=settings, client=client
+        document,
+        instance=instance,
+        settings=settings,
+        client=client,
+        force_local=force_local,
     )
     return metadata, document
 
@@ -47,16 +60,37 @@ async def extract_from_document(
     instance: Instance,
     settings: Settings,
     client: object | None = None,
+    force_local: bool = False,
 ) -> ExtractedMetadata:
     if instance.extraction == "heuristic":
-        # Configured off, not failed -- e.g. an instance whose documents must not be
-        # sent to a third party (DESIGN.md §5, privacy note).
+        # Configured off, not failed -- e.g. an instance whose documents must not
+        # be sent anywhere at all (DESIGN.md §5). `force_local` only ever narrows
+        # where a document may go, so it cannot switch a model back on here.
         log.info("instance %s is configured for heuristic extraction", instance.key)
         return await _heuristic(document)
 
     try:
-        return await llm.extract(document, settings, client=client)
-    except llm.LlmUnavailable as exc:
+        backend: LLMBackend = select_backend(
+            settings,
+            mode=instance.extraction,
+            force_local=force_local,
+            client=client,
+        )
+    except LlmUnavailable as exc:
+        # Only reachable via force_local with no local model configured: the
+        # restricted document stays here and gets heuristics.
+        log.info("no local backend for a restricted submission (%s); using heuristics", exc)
+        return await _heuristic(document, fallback_reason=str(exc))
+
+    log.info(
+        "tier 1 for instance %s via %s%s",
+        instance.key,
+        backend.label,
+        " (restricted: local only)" if force_local else "",
+    )
+    try:
+        return await llm.extract(document, settings, backend=backend)
+    except LlmUnavailable as exc:
         log.info("tier 1 unavailable (%s); falling back to heuristics", exc)
         return await _heuristic(document, fallback_reason=str(exc))
 

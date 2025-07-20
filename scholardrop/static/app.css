@@ -215,6 +215,11 @@ input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visibl
 .dropzone-hint { display: block; color: var(--muted); margin-bottom: 0.75rem; }
 .dropzone input[type="file"] { font: inherit; max-width: 100%; }
 
+/* Restricted-content opt-in (DESIGN.md §5): a real choice, not fine print. */
+.check { display: flex; align-items: flex-start; gap: 0.5rem; margin-top: 1rem; cursor: pointer; }
+.check input { margin-top: 0.25rem; }
+.check .quiet { display: block; }
+
 .progress {
   background: #fff;
   border: 1px solid var(--line);

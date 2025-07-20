@@ -28,7 +28,9 @@ def test_index_lists_configured_instances(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.text
     assert "SHAREOK" in body
-    assert "https://shareok.org/server" in body
+    # From the loaded registry, like /healthz: repointing an instance at a test
+    # host is a config change, not a broken landing page.
+    assert client.app.state.registry.instances["shareok"].base_url in body
     assert "/login/shareok" in body
 
 
