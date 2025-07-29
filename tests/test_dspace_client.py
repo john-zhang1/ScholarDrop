@@ -736,6 +736,9 @@ async def test_find_by_submitter_requires_and_sends_uuid(client: DSpaceClient) -
     drafts = await client.find_by_submitter()
 
     assert route.calls[0].request.url.params["uuid"] == "eperson-uuid-1"
+    # The drafts list labels each blocker with the collection's own field labels,
+    # which are reached through the submission definition (Phase 4b).
+    assert route.calls[0].request.url.params["embed"] == "submissionDefinition"
     assert [d.id for d in drafts] == ["9"]
 
 

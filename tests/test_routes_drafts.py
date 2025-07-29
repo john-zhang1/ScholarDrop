@@ -125,3 +125,53 @@ def test_discarding_the_current_draft_clears_it_from_the_session(
 def test_drafts_need_a_session(web) -> None:
     assert web.get("/drafts").status_code == 303
     assert web.post("/drafts/7/discard").status_code == 303
+
+
+# ---- readiness (Phase 4b) --------------------------------------------------
+
+
+def test_a_row_says_what_its_draft_still_needs(signed_in, fake_dspace) -> None:
+    """The whole point: no opening a draft to find out it is one field short."""
+    given_drafts(fake_dspace, make_workspaceitem("7"))  # the fake's default: 3 required fields
+
+    body = signed_in.get("/drafts/list").text
+
+    assert "Needs 3" in body
+    # Labelled as the collection labels them, not as DSpace names them.
+    assert "Title — This field is required." in body
+    assert "dc.title" not in body
+
+
+def test_a_complete_draft_says_so_and_offers_the_submit_step(signed_in, fake_dspace) -> None:
+    given_drafts(fake_dspace, make_workspaceitem("7", errors=[]))
+
+    body = signed_in.get("/drafts/list").text
+
+    assert "Ready" in body
+    assert "Review &amp; submit" in body
+    assert "1 ready to deposit on this page" in body
+
+
+def test_an_unreadable_form_config_degrades_the_wording_not_the_list(
+    signed_in, fake_dspace
+) -> None:
+    """A draft that cannot be labelled still gets to say what is wrong with it."""
+    fake_dspace.raise_on["submission_definition"] = DSpaceUnavailable("config down", status=503)
+    given_drafts(fake_dspace, make_workspaceitem("7"))
+
+    response = signed_in.get("/drafts/list")
+
+    assert response.status_code == 200
+    assert "Needs 3" in response.text
+    assert "dc.title" in response.text, "the repository's own name beats silence"
+    assert "form configuration could not be read" in response.text
+
+
+def test_the_form_config_is_read_once_for_a_page_of_drafts(signed_in, fake_dspace) -> None:
+    """Ten drafts in one collection are one definition, not ten."""
+    given_drafts(fake_dspace, *[make_workspaceitem(str(i)) for i in range(4)])
+
+    signed_in.get("/drafts/list")
+
+    definitions = [c for c in fake_dspace.calls if c[0] == "submission_definition"]
+    assert len(definitions) == 1

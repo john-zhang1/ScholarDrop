@@ -1,20 +1,41 @@
-{# The drafts themselves. Re-rendered in place after a discard. #}
+{# The drafts themselves. Re-rendered in place after a discard.
+
+   Each row carries the repository's own verdict on the draft (Phase 4b): what it
+   still needs, in the collection's own field labels, so nobody has to open a
+   draft to find out it is one field short. #}
 {% if drafts %}
-<p class="quiet count">{{ total }} in progress</p>
+<p class="quiet count">
+  {{ total }} in progress{% if ready_count %} · {{ ready_count }} ready to deposit on this page{% endif %}
+</p>
 <ul class="collection-list">
   {% for draft in drafts %}
-  <li class="collection" id="draft-{{ draft.id }}">
+  {% set state = draft.readiness %}
+  <li class="collection draft {% if state.ready %}is-ready{% endif %}" id="draft-{{ draft.id }}">
     <div>
       <a class="collection-name" href="/review/{{ draft.id }}">{{ draft.title or 'Untitled draft' }}</a>
+      <span class="badge {% if state.ready %}badge-ready{% elif state.missing_only %}badge-needs{% else %}badge-problem{% endif %}">{{ state.badge }}</span>
       <div class="quiet">
         draft {{ draft.id }}
         {% if draft.collection_name %} · {{ draft.collection_name }}{% endif %}
         {% if draft.last_modified %} · last changed {{ draft.last_modified }}{% endif %}
         {% if draft.filenames %} · {{ draft.filenames | join(', ') }}{% else %} · no file attached{% endif %}
       </div>
+      {% if state.blockers %}
+      <ul class="blockers">
+        {% for blocker in state.shown %}
+        <li>{{ blocker.text }}</li>
+        {% endfor %}
+        {% if state.hidden %}
+        <li class="quiet">and {{ state.hidden }} more — open the draft to see {% if state.hidden == 1 %}it{% else %}them{% endif %}.</li>
+        {% endif %}
+        {% if not state.labelled %}
+        <li class="quiet">Field names are the repository's own — its form configuration could not be read just now.</li>
+        {% endif %}
+      </ul>
+      {% endif %}
     </div>
     <div class="draft-actions">
-      <a class="button" href="/review/{{ draft.id }}">Resume</a>
+      <a class="button" href="/review/{{ draft.id }}">{% if state.ready %}Review &amp; submit{% else %}Resume{% endif %}</a>
       <button class="link-button" type="button"
               hx-get="/drafts/{{ draft.id }}/discard"
               hx-target="#draft-{{ draft.id }} .draft-actions"
@@ -23,13 +44,13 @@
   </li>
   {% endfor %}
 </ul>
-{% if has_next %}
-<button class="button quiet-button" hx-get="/drafts/list?page={{ page + 1 }}"
-        hx-target="#drafts-list" hx-swap="innerHTML">Next page</button>
-{% endif %}
 {% if page > 0 %}
 <button class="button quiet-button" hx-get="/drafts/list?page={{ page - 1 }}"
         hx-target="#drafts-list" hx-swap="innerHTML">Previous page</button>
+{% endif %}
+{% if has_next %}
+<button class="button quiet-button" hx-get="/drafts/list?page={{ page + 1 }}"
+        hx-target="#drafts-list" hx-swap="innerHTML">Next page</button>
 {% endif %}
 {% else %}
 <p class="quiet">Nothing in progress. <a href="/browse">Start a submission</a>.</p>

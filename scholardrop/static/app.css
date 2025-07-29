@@ -279,6 +279,21 @@ textarea { width: 100%; resize: vertical; }
 }
 .badge-check { background: #f6e7c8; color: #6b4a06; }
 
+/* Draft readiness. Colour is a second signal, never the only one -- the badge
+   says "Ready" or "Needs 3" in words, and the blockers are listed below it. */
+.badge-ready { background: #dff0e0; color: #1d5b28; }
+.badge-needs { background: #f6e7c8; color: #6b4a06; }
+.badge-problem { background: #f7dcdc; color: #7c1d1d; }
+
+.draft.is-ready { border-left: 3px solid #2f7d3b; }
+.blockers {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.blockers li { margin-top: 0.15rem; }
+
 .add-row { font-size: 0.875rem; margin-top: 0.35rem; }
 .row-remove { font-size: 0.8125rem; text-decoration: none; }
 .more-fields summary { cursor: pointer; color: var(--muted); font-size: 0.875rem; }

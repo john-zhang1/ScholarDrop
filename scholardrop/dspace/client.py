@@ -374,7 +374,17 @@ class DSpaceClient:
         payload = await self._json(
             "GET",
             "/submission/workspaceitems/search/findBySubmitter",
-            params={"uuid": uuid, "page": page, "size": size},
+            params={
+                "uuid": uuid,
+                "page": page,
+                "size": size,
+                # Each row says what its draft still needs, and naming the fields
+                # means reading the collection's form config -- which is reached
+                # through the submission definition. The embed carries the
+                # definition without its sections, as everywhere else in 9.2, so
+                # `load_sections` still re-reads it (from cache, after the first).
+                "embed": "submissionDefinition",
+            },
         )
         return parse_page(payload, "workspaceitems", WorkspaceItem.from_payload)
 

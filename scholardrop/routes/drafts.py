@@ -9,7 +9,7 @@ including drafts started in the DSpace UI rather than here.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,15 @@ from fastapi.responses import HTMLResponse
 
 from scholardrop.dspace import DSpaceError
 from scholardrop.dspace.models import WorkspaceItem
-from scholardrop.routes.deps import DraftId, dspace_client, render, require_session
+from scholardrop.routes.deps import (
+    DraftId,
+    dspace_client,
+    render,
+    require_session,
+    session_instance,
+)
+from scholardrop.submission.definition import load_form_configs, load_sections
+from scholardrop.submission.readiness import Readiness, assess, labels_from
 
 router = APIRouter()
 log = logging.getLogger("scholardrop.drafts")
@@ -36,6 +44,7 @@ class Draft:
     collection_name: str
     last_modified: str
     filenames: list[str]
+    readiness: Readiness = field(default_factory=Readiness)
 
 
 def _first_value(sections: dict[str, Any], metadata_field: str) -> str:
@@ -61,7 +70,46 @@ def _filenames(sections: dict[str, Any]) -> list[str]:
     return names
 
 
-async def _to_draft(client: Any, item: WorkspaceItem, names: dict[str, str]) -> Draft:
+async def _labels(
+    client: Any, item: WorkspaceItem, *, cache: Any, instance_key: str, memo: dict[str, Any]
+) -> tuple[dict[str, str], bool]:
+    """Field labels for this draft's collection, or nothing and an honest flag.
+
+    Keyed by the submission definition rather than the collection, because two
+    collections sharing a definition share their labels. `memo` spans the page;
+    the `ConfigCache` underneath spans the hour, so the second page of drafts
+    usually fetches nothing.
+    """
+    definition = (item.raw.get("_links") or {}).get("submissionDefinition", {}).get("href", "")
+    key = str(definition or item.sections.get("collection") or item.id)
+    if key in memo:
+        labels = memo[key]
+        return (labels, True) if labels is not None else ({}, False)
+
+    try:
+        sections = await load_sections(client, item, cache=cache, instance_key=instance_key)
+        configs = await load_form_configs(client, sections, cache=cache, instance_key=instance_key)
+        labels = labels_from(configs)
+    except DSpaceError as exc:
+        # A draft whose form config we cannot read still gets to say what is
+        # wrong with it, in DSpace's own field names. Never take the list down.
+        log.info("could not read the form config for draft %s: %s", item.id, exc)
+        memo[key] = None
+        return {}, False
+
+    memo[key] = labels
+    return labels, True
+
+
+async def _to_draft(
+    client: Any,
+    item: WorkspaceItem,
+    names: dict[str, str],
+    *,
+    cache: Any,
+    instance_key: str,
+    labels_memo: dict[str, Any],
+) -> Draft:
     collection_uuid = item.sections.get("collection")
     collection_name = ""
     if isinstance(collection_uuid, str) and collection_uuid:
@@ -73,12 +121,17 @@ async def _to_draft(client: Any, item: WorkspaceItem, names: dict[str, str]) -> 
                 log.info("could not name collection %s: %s", collection_uuid, exc)
                 names[collection_uuid] = ""
         collection_name = names[collection_uuid]
+
+    labels, labelled = await _labels(
+        client, item, cache=cache, instance_key=instance_key, memo=labels_memo
+    )
     return Draft(
         id=item.id,
         title=_first_value(item.sections, TITLE_FIELD),
         collection_name=collection_name,
         last_modified=(item.last_modified or "")[:10],
         filenames=_filenames(item.sections),
+        readiness=assess(item, labels, labelled=labelled),
     )
 
 
@@ -91,10 +144,22 @@ async def drafts(request: Request) -> HTMLResponse:
 @router.get("/drafts/list", response_class=HTMLResponse)
 async def drafts_list(request: Request, page: int = Query(0, ge=0)) -> HTMLResponse:
     session = require_session(request)
+    instance = session_instance(request, session)
     names: dict[str, str] = {}
+    labels_memo: dict[str, Any] = {}
     async with dspace_client(request, session) as client:
         results = await client.find_by_submitter(session.eperson_uuid, page=page, size=PAGE_SIZE)
-        items = [await _to_draft(client, item, names) for item in results.items]
+        items = [
+            await _to_draft(
+                client,
+                item,
+                names,
+                cache=request.app.state.form_configs,
+                instance_key=instance.key,
+                labels_memo=labels_memo,
+            )
+            for item in results.items
+        ]
     return render(
         request,
         "partials/drafts_list.html",
@@ -102,6 +167,7 @@ async def drafts_list(request: Request, page: int = Query(0, ge=0)) -> HTMLRespo
         total=results.total,
         page=page,
         has_next=results.has_next,
+        ready_count=sum(1 for draft in items if draft.readiness.ready),
     )
 
 
