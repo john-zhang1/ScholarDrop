@@ -365,6 +365,23 @@ def test_the_policy_refuses_inline_and_third_party_script(web) -> None:
     )
 
 
+def test_htmx_is_told_not_to_inject_its_indicator_styles(web) -> None:
+    """`style-src 'self'` and htmx's boot-time <style> cannot both have their way.
+
+    htmx injects its own `.htmx-indicator` rules as an inline style element at
+    load, which the policy blocks -- visibly only in the browser console, which is
+    why this went unnoticed until the browser gate (Phase 6b). app.css already
+    ships those rules, so the injection is turned off rather than admitting
+    'unsafe-inline' for a duplicate of our own CSS.
+    """
+    body = web.get("/").text
+
+    assert '"includeIndicatorStyles": false' in body
+    policy = web.get("/").headers["content-security-policy"]
+    style_src = next(d.strip() for d in policy.split(";") if d.strip().startswith("style-src"))
+    assert style_src == "style-src 'self'", "the meta tag exists so this can stay strict"
+
+
 def test_a_refused_cross_site_post_still_carries_the_headers(signed_in) -> None:
     response = signed_in.post("/logout", headers={"Origin": "https://evil.example"})
 

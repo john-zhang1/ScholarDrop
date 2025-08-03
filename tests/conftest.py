@@ -8,6 +8,31 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def pytest_addoption(parser) -> None:
+    parser.addoption(
+        "--e2e",
+        action="store_true",
+        default=False,
+        help="run the browser tests in tests/e2e (needs playwright and a system chromium)",
+    )
+
+
+def pytest_configure(config) -> None:
+    config.addinivalue_line("markers", "e2e: drives a real browser; needs --e2e")
+    config.addinivalue_line("markers", "no_js: runs with JavaScript disabled")
+    config.addinivalue_line("markers", "allow_console: tolerates browser console errors")
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """Browser tests are opt-in: `pytest -q` must work on a box with no browser."""
+    if config.getoption("--e2e"):
+        return
+    skip = pytest.mark.skip(reason="browser test; pass --e2e to run")
+    for item in items:
+        if "e2e" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_from_local_environment(monkeypatch):
     """Settings under test are the documented defaults, not this machine's.
