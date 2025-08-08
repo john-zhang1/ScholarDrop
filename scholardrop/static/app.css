@@ -113,10 +113,25 @@ input[type="text"], input[type="password"], input[type="search"] {
   background: #fff;
 }
 
-input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible {
+input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible,
+select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* Off-screen until focused, then the first thing on the page. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: #fff;
+  color: var(--ink);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0 0 6px 0;
+  z-index: 10;
+}
+.skip-link:focus { left: 0; }
 
 .actions { display: flex; align-items: center; gap: 1rem; margin-top: 1.25rem; }
 

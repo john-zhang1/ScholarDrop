@@ -1,11 +1,15 @@
-{# One configured field: its label, hint, rows, and the add button if it repeats. #}
+{# One configured field: its label, hint, rows, and the add button if it repeats.
+
+   The hint and the error carry the ids `field.describedby` names, so the input
+   announces them too -- a required field whose message is only visible on screen
+   tells a screen-reader user nothing. #}
 <div class="field{% if field.required_empty %} is-missing{% endif %}">
   <label for="{{ field.dom_id }}">
     {{ field.config.label or field.config.metadata_field }}
-    {% if field.config.mandatory %}<span class="required" title="Required by this collection">required</span>{% endif %}
+    {% if field.config.mandatory %}<span class="required">required</span>{% endif %}
     <span class="quiet metadata-field">{{ field.config.metadata_field }}</span>
   </label>
-  {% if field.config.hint %}<p class="hint">{{ field.config.hint }}</p>{% endif %}
+  {% if field.config.hint %}<p class="hint" id="hint-{{ field.dom_id }}">{{ field.config.hint }}</p>{% endif %}
 
   <div id="rows-{{ field.dom_id }}" class="field-rows">
     {% for value in field.rows() %}
@@ -16,6 +20,7 @@
 
   {% if field.config.repeatable %}
   <button type="button" class="link-button add-row"
+          aria-label="Add another {{ (field.config.label or field.config.metadata_field) | lower }} value"
           hx-get="/review/{{ form.workspaceitem_id }}/row?section={{ field.section_id | urlencode }}&amp;field={{ field.config.metadata_field | urlencode }}"
           hx-target="#rows-{{ field.dom_id }}"
           hx-swap="beforeend">
@@ -23,10 +28,14 @@
   </button>
   {% endif %}
 
-  {% for message in field.errors %}
-  <p class="error">{{ message }}</p>
-  {% endfor %}
-  {% if field.required_empty and not field.errors %}
-  <p class="error">{{ field.config.mandatory_message or 'This field is required.' }}</p>
+  {% if field.has_error %}
+  <div id="error-{{ field.dom_id }}">
+    {% for message in field.errors %}
+    <p class="error">{{ message }}</p>
+    {% endfor %}
+    {% if field.required_empty and not field.errors %}
+    <p class="error">{{ field.config.mandatory_message or 'This field is required.' }}</p>
+    {% endif %}
+  </div>
   {% endif %}
 </div>

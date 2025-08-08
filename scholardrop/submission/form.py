@@ -180,6 +180,26 @@ class FormField:
         """Highlighted in the form: DSpace will reject the deposit without it."""
         return self.config.mandatory and not self.filled
 
+    @property
+    def has_error(self) -> bool:
+        """Anything the form is complaining about, from either source."""
+        return bool(self.errors) or self.required_empty
+
+    @property
+    def describedby(self) -> str:
+        """`aria-describedby` for this field's inputs: its hint and its error.
+
+        Only ids that are actually rendered -- pointing at a missing element
+        makes some screen readers announce nothing at all, which is worse than
+        the silence it was meant to fix.
+        """
+        ids = []
+        if self.config.hint:
+            ids.append(f"hint-{self.dom_id}")
+        if self.has_error:
+            ids.append(f"error-{self.dom_id}")
+        return " ".join(ids)
+
     def rows(self) -> list[FormValue]:
         """Always at least one row, so an empty field is still editable."""
         return self.values or [FormValue()]

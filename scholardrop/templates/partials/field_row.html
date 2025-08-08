@@ -1,11 +1,30 @@
 {# One input for one value of one field. Also returned on its own by
    /review/{id}/row when a repeatable field gains a row. Expects `field`,
-   `value`, and `row_index` (only the first row carries the id the label
-   points at). #}
+   `value`, and `row_index`.
+
+   Only the first row carries the id the <label for> points at, so every later
+   row states its own name (`aria-label`) -- otherwise an added author row is
+   announced as an unlabelled edit box, which is what the accessibility pass
+   found. `aria-describedby` ties the hint and the error text to the input, and a
+   mandatory field says so with `aria-required` rather than the native `required`
+   attribute: DSpace decides what is complete, and a browser refusing to submit
+   would break saving an unfinished draft. #}
 {% set row_index = row_index | default(0) %}
+{% set label = field.config.label or field.config.metadata_field %}
+{% set described = field.describedby %}
+{# `row_index = none` means "appended by /review/{id}/row", which knows the field
+   but not how many rows the page already has. Such a row is never the first, so
+   it must not repeat the id -- two elements with one id is how the added input
+   ended up sharing (and losing) the label. #}
+{% set first = row_index is not none and row_index == 0 %}
+{% set row_label = label ~ (', value ' ~ (row_index + 1) if row_index else ', another value') %}
 <div class="field-row">
   {% if field.config.is_choice and field.options %}
-  <select {% if row_index == 0 %}id="{{ field.dom_id }}"{% endif %} name="{{ field.name }}">
+  <select {% if first %}id="{{ field.dom_id }}"{% else %}aria-label="{{ row_label }}"{% endif %}
+          name="{{ field.name }}"
+          {% if described %}aria-describedby="{{ described }}"{% endif %}
+          {% if field.config.mandatory %}aria-required="true"{% endif %}
+          {% if field.has_error %}aria-invalid="true"{% endif %}>
     <option value="">— choose —</option>
     {% for option in field.options %}
     <option value="{{ option.value }}"{% if option.value == value.value %} selected{% endif %}>{{ option.display }}</option>
@@ -15,21 +34,32 @@
     {% endif %}
   </select>
   {% elif field.config.multiline %}
-  <textarea {% if row_index == 0 %}id="{{ field.dom_id }}"{% endif %} name="{{ field.name }}" rows="6">{{ value.value }}</textarea>
+  <textarea {% if first %}id="{{ field.dom_id }}"{% else %}aria-label="{{ row_label }}"{% endif %}
+            name="{{ field.name }}" rows="6"
+            {% if described %}aria-describedby="{{ described }}"{% endif %}
+            {% if field.config.mandatory %}aria-required="true"{% endif %}
+            {% if field.has_error %}aria-invalid="true"{% endif %}>{{ value.value }}</textarea>
   {% else %}
-  <input type="text" {% if row_index == 0 %}id="{{ field.dom_id }}"{% endif %} name="{{ field.name }}"
+  <input type="text" {% if first %}id="{{ field.dom_id }}"{% else %}aria-label="{{ row_label }}"{% endif %}
+         name="{{ field.name }}"
          value="{{ value.value }}"
+         {% if described %}aria-describedby="{{ described }}"{% endif %}
+         {% if field.config.mandatory %}aria-required="true"{% endif %}
+         {% if field.has_error %}aria-invalid="true"{% endif %}
          {% if field.config.input_type == 'date' %}placeholder="YYYY-MM-DD"{% endif %}>
   {% endif %}
 
+  {# Text, not colour or a tooltip: `title` is not reliably announced, and the
+     badge is the only signal that a value was guessed. #}
   {% if value.low_confidence and value.value %}
-  <span class="badge badge-check" title="A heuristic guessed this — read it before you deposit.">check this</span>
+  <span class="badge badge-check">check this — a heuristic guessed it</span>
   {% elif value.prefilled %}
   <span class="badge">from the PDF</span>
   {% endif %}
 
   {% if field.config.repeatable %}
   <button type="button" class="link-button row-remove"
+          aria-label="Remove this {{ label | lower }} value"
           hx-on:click="this.closest('.field-row').remove()">Remove</button>
   {% endif %}
 </div>

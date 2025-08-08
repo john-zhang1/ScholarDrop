@@ -35,11 +35,7 @@
       {% endif %}
     </div>
     <div class="draft-actions">
-      <a class="button" href="/review/{{ draft.id }}">{% if state.ready %}Review &amp; submit{% else %}Resume{% endif %}</a>
-      <button class="link-button" type="button"
-              hx-get="/drafts/{{ draft.id }}/discard"
-              hx-target="#draft-{{ draft.id }} .draft-actions"
-              hx-swap="innerHTML">Discard</button>
+      {% include "partials/draft_actions.html" %}
     </div>
   </li>
   {% endfor %}

@@ -1,0 +1,9 @@
+{# A draft row's normal actions. Its own partial because "Keep" swaps back to
+   exactly this, without re-reading every draft in the list. #}
+<a class="button" href="/review/{{ draft.id }}">{% if draft.readiness.ready %}Review &amp; submit{% else %}Resume{% endif %}</a>
+<button class="link-button" type="button"
+        id="discard-{{ draft.id }}"
+        aria-label="Discard {{ draft.title or 'untitled draft' }}"
+        hx-get="/drafts/{{ draft.id }}/discard"
+        hx-target="#draft-{{ draft.id }} .draft-actions"
+        hx-swap="innerHTML">Discard</button>

@@ -362,7 +362,15 @@ async def add_row(
         values=[FormValue()],
         options=vocabularies.get(match.vocabulary or "", []),
     )
-    return render(request, "partials/field_row.html", field=form_field, value=FormValue())
+    # row_index=None: this row is appended, so it is never the first one and must
+    # not repeat the id the field's <label for> points at.
+    return render(
+        request,
+        "partials/field_row.html",
+        field=form_field,
+        value=FormValue(),
+        row_index=None,
+    )
 
 
 async def _collection_name(client: Any, item: Any, *, cache: Any, instance_key: str) -> str:

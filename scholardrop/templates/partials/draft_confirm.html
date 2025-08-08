@@ -1,11 +1,18 @@
 {# Discarding deletes the draft and its file in the repository, so it is asked
-   for twice. Swaps back over the row's actions. #}
-<span class="quiet">Discard permanently?</span>
+   for twice. Swaps back over the row's actions.
+
+   The confirm button takes focus on arrival (`hx-on::load`, htmx's own event for
+   inserted content): a destructive choice that appears where the keyboard is not
+   is a choice made blind. "Keep" restores this row's actions -- not the whole
+   list, which would re-read every draft and its form configuration. #}
+<span class="quiet" id="confirm-{{ wsi_id }}">Discard permanently?</span>
 <button class="button danger" type="button"
+        aria-describedby="confirm-{{ wsi_id }}"
         hx-post="/drafts/{{ wsi_id }}/discard"
         hx-target="#drafts-list"
-        hx-swap="innerHTML">Discard</button>
+        hx-swap="innerHTML"
+        hx-on::load="this.focus()">Discard</button>
 <button class="link-button" type="button"
-        hx-get="/drafts/list"
-        hx-target="#drafts-list"
+        hx-get="/drafts/{{ wsi_id }}/actions"
+        hx-target="#draft-{{ wsi_id }} .draft-actions"
         hx-swap="innerHTML">Keep</button>

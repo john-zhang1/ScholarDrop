@@ -21,20 +21,24 @@ def given_a_tree(fake_dspace) -> None:
 
 
 def test_the_tabs_swap_the_panel_without_navigating(signed_in_page, live_app, fake_dspace) -> None:
-    """The tab buttons carry `hx-on:click`, which needs the CSP to allow eval."""
+    """The tab buttons carry `hx-on:click`, which needs the CSP to allow eval.
+
+    They are buttons with `aria-pressed`, not `role="tab"` -- see
+    tests/e2e/test_accessibility.py for why that role was given up.
+    """
     given_a_tree(fake_dspace)
     page = signed_in_page
     page.goto(f"{live_app}/browse")
     page.wait_for_selector("#tab-panel .collection-list, #tab-panel p")
 
-    page.click("button[role=tab]:has-text('Browse all')")
+    page.click("button.tab:has-text('Browse all')")
 
     page.wait_for_selector("#tab-panel details")
     assert page.url.endswith("/browse"), "a tab is a swap, not a page load"
     # `hx-on:click` moved the active class -- proof the inline handler compiled.
-    assert "is-active" in (
-        page.get_attribute("button[role=tab]:has-text('Browse all')", "class") or ""
-    )
+    everything = page.locator("button.tab:has-text('Browse all')")
+    assert "is-active" in (everything.get_attribute("class") or "")
+    assert everything.get_attribute("aria-pressed") == "true"
 
 
 def test_a_community_loads_its_children_once_however_often_it_is_toggled(

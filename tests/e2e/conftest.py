@@ -112,7 +112,7 @@ def signed_in_page(page, live_app, fake_dspace):
     page.goto(f"{live_app}/login/shareok")
     page.fill("input[name=user]", "jane@example.edu")
     page.fill("input[name=password]", "pw")
-    page.click("button[type=submit]")
+    page.click("form.stack button[type=submit]")
     page.wait_for_url(f"{live_app}/browse**")
     fake_dspace.calls.clear()
     return page

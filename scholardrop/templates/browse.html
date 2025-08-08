@@ -5,23 +5,36 @@
 <h1>Choose a collection</h1>
 <p class="lede">Pick where this publication belongs. You can change nothing yet — the next step is the file.</p>
 
-<nav class="tabs" role="tablist">
-  <button role="tab" class="tab {% if tab == 'mine' %}is-active{% endif %}"
+{# Buttons with `aria-pressed`, not `role="tab"`. The ARIA tabs pattern promises
+   arrow-key navigation between tabs, which would need real JavaScript; claiming
+   the role without it leaves a screen-reader user pressing arrows at something
+   inert. A pressed toggle button is what these actually are, it is announced
+   correctly, and it works with Tab and Enter. The handler keeps the state in
+   step -- `is-active` alone was styling with nothing behind it. #}
+<nav class="tabs" aria-label="How to find a collection">
+  <button type="button" class="tab {% if tab == 'mine' %}is-active{% endif %}"
+          aria-pressed="{% if tab == 'mine' %}true{% else %}false{% endif %}"
+          aria-controls="tab-panel"
           hx-get="/browse/mine" hx-target="#tab-panel" hx-swap="innerHTML"
-          hx-on:click="document.querySelectorAll('.tab').forEach(t => t.classList.remove('is-active')); this.classList.add('is-active')">
+          hx-on:click="document.querySelectorAll('.tab').forEach(t => { t.classList.remove('is-active'); t.setAttribute('aria-pressed', 'false'); }); this.classList.add('is-active'); this.setAttribute('aria-pressed', 'true')">
     My collections
   </button>
-  <button role="tab" class="tab {% if tab == 'all' %}is-active{% endif %}"
+  <button type="button" class="tab {% if tab == 'all' %}is-active{% endif %}"
+          aria-pressed="{% if tab == 'all' %}true{% else %}false{% endif %}"
+          aria-controls="tab-panel"
           hx-get="/browse/all" hx-target="#tab-panel" hx-swap="innerHTML"
-          hx-on:click="document.querySelectorAll('.tab').forEach(t => t.classList.remove('is-active')); this.classList.add('is-active')">
+          hx-on:click="document.querySelectorAll('.tab').forEach(t => { t.classList.remove('is-active'); t.setAttribute('aria-pressed', 'false'); }); this.classList.add('is-active'); this.setAttribute('aria-pressed', 'true')">
     Browse all
   </button>
 </nav>
 
-<div id="tab-panel"
+{# aria-busy while the panel is empty, and polite announcement when it fills:
+   the swap is silent otherwise. #}
+<div id="tab-panel" aria-live="polite" aria-busy="true"
      hx-get="{% if tab == 'all' %}/browse/all{% else %}/browse/mine{% endif %}"
      hx-trigger="load"
-     hx-swap="innerHTML">
+     hx-swap="innerHTML"
+     hx-on::after-settle="this.setAttribute('aria-busy', 'false')">
   <p class="quiet">Loading…</p>
 </div>
 

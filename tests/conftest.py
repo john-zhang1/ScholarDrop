@@ -24,13 +24,28 @@ def pytest_configure(config) -> None:
 
 
 def pytest_collection_modifyitems(config, items) -> None:
-    """Browser tests are opt-in: `pytest -q` must work on a box with no browser."""
-    if config.getoption("--e2e"):
+    """Split the two suites: they cannot share a process.
+
+    Without `--e2e`, the browser tests skip, so `pytest -q` works on a box with no
+    browser. With it, *only* the browser tests run -- and that is not tidiness.
+    Playwright's sync API refuses to work inside a running event loop, and this
+    project is `asyncio_mode = auto`, so an async test anywhere earlier in the
+    session leaves one running and every browser test then dies with
+    "Runner.run() cannot be called from a running event loop". Running them
+    together is the failure mode; keeping them apart is the fix.
+    """
+    if not config.getoption("--e2e"):
+        skip = pytest.mark.skip(reason="browser test; pass --e2e to run")
+        for item in items:
+            if "e2e" in item.keywords:
+                item.add_marker(skip)
         return
-    skip = pytest.mark.skip(reason="browser test; pass --e2e to run")
-    for item in items:
-        if "e2e" in item.keywords:
-            item.add_marker(skip)
+
+    browser_tests = [item for item in items if "e2e" in item.keywords]
+    deselected = [item for item in items if "e2e" not in item.keywords]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = browser_tests
 
 
 @pytest.fixture(autouse=True)

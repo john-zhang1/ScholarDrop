@@ -178,6 +178,28 @@ async def confirm_discard(request: Request, wsi_id: DraftId) -> HTMLResponse:
     return render(request, "partials/draft_confirm.html", wsi_id=wsi_id)
 
 
+@router.get("/drafts/{wsi_id}/actions", response_class=HTMLResponse)
+async def draft_actions(request: Request, wsi_id: DraftId) -> HTMLResponse:
+    """One row's buttons again, after the user decides not to discard it.
+
+    Backing out of a confirmation used to re-render the whole list, which reads
+    every draft and every collection's form configuration to answer a question
+    the user just declined to ask. This is that row and nothing else.
+    """
+    session = require_session(request)
+    async with dspace_client(request, session) as client:
+        item = await client.get_workspaceitem(wsi_id)
+        draft = await _to_draft(
+            client,
+            item,
+            {},
+            cache=request.app.state.form_configs,
+            instance_key=session_instance(request, session).key,
+            labels_memo={},
+        )
+    return render(request, "partials/draft_actions.html", draft=draft)
+
+
 @router.post("/drafts/{wsi_id}/discard", response_class=HTMLResponse)
 async def discard(request: Request, wsi_id: DraftId) -> HTMLResponse:
     session = require_session(request)
