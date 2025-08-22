@@ -53,7 +53,10 @@
 </div>
 {% endif %}
 
-<form class="submission-form" method="post" action="/review/{{ form.workspaceitem_id }}/confirm">
+{# Named, because it is a real landmark worth jumping to -- unlike the sign-out
+   form, which is not one at all. #}
+<form class="submission-form" aria-label="Submission details"
+      method="post" action="/review/{{ form.workspaceitem_id }}/confirm">
   {% for section in form.sections %}
     {% if section.editable %}
     <fieldset class="section">

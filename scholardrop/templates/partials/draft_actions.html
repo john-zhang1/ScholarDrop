@@ -1,9 +1,15 @@
 {# A draft row's normal actions. Its own partial because "Keep" swaps back to
-   exactly this, without re-reading every draft in the list. #}
-<a class="button" href="/review/{{ draft.id }}">{% if draft.readiness.ready %}Review &amp; submit{% else %}Resume{% endif %}</a>
+   exactly this, without re-reading every draft in the list.
+
+   Every action names its draft. Tabbing a list of untitled drafts otherwise gives
+   "Resume, Discard, Resume, Discard" with nothing to tell them apart -- the row
+   context a sighted user reads is not in the accessible name. #}
+{% set which = (draft.title or 'untitled draft') ~ ' (draft ' ~ draft.id ~ ')' %}
+<a class="button" href="/review/{{ draft.id }}"
+   aria-label="{% if draft.readiness.ready %}Review and submit{% else %}Resume{% endif %} {{ which }}">{% if draft.readiness.ready %}Review &amp; submit{% else %}Resume{% endif %}</a>
 <button class="link-button" type="button"
         id="discard-{{ draft.id }}"
-        aria-label="Discard {{ draft.title or 'untitled draft' }}"
+        aria-label="Discard {{ which }}"
         hx-get="/drafts/{{ draft.id }}/discard"
         hx-target="#draft-{{ draft.id }} .draft-actions"
         hx-swap="innerHTML">Discard</button>

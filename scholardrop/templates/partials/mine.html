@@ -12,7 +12,7 @@
          hx-swap="innerHTML"
          hx-trigger="keyup changed delay:300ms, search"
          hx-indicator="#mine-spinner">
-  <span id="mine-spinner" class="htmx-indicator quiet">searching…</span>
+  <span id="mine-spinner" class="htmx-indicator quiet" role="status">searching…</span>
 
   <div id="mine-results" hx-get="/browse/mine/results?q={{ q or '' }}" hx-trigger="load">
     <p class="quiet">Loading…</p>

@@ -23,7 +23,8 @@
     <div class="whoami">
       <span>{{ signed_in_as }}{% if instance %} at {{ instance.name }}{% endif %}</span>
       <a href="/drafts">Drafts</a>
-      <form method="post" action="/logout">
+      {# role="none" so a one-button sign-out form is not offered as a landmark. #}
+      <form method="post" action="/logout" role="none">
         <button type="submit" class="link-button">Sign out</button>
       </form>
     </div>

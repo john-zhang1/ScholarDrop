@@ -6,8 +6,12 @@
 <div class="field{% if field.required_empty %} is-missing{% endif %}">
   <label for="{{ field.dom_id }}">
     {{ field.config.label or field.config.metadata_field }}
-    {% if field.config.mandatory %}<span class="required">required</span>{% endif %}
-    <span class="quiet metadata-field">{{ field.config.metadata_field }}</span>
+    {# Both are inside the label, so both land in the accessible name unless
+       hidden: a screen reader was announcing "Title REQUIRED dc.title". The
+       requirement is already carried by aria-required, and the metadata field
+       name is scaffolding for repository staff, not something to read aloud. #}
+    {% if field.config.mandatory %}<span class="required" aria-hidden="true">required</span>{% endif %}
+    <span class="quiet metadata-field" aria-hidden="true">{{ field.config.metadata_field }}</span>
   </label>
   {% if field.config.hint %}<p class="hint" id="hint-{{ field.dom_id }}">{{ field.config.hint }}</p>{% endif %}
 

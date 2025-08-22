@@ -12,7 +12,11 @@
   {% set state = draft.readiness %}
   <li class="collection draft {% if state.ready %}is-ready{% endif %}" id="draft-{{ draft.id }}">
     <div>
-      <a class="collection-name" href="/review/{{ draft.id }}">{{ draft.title or 'Untitled draft' }}</a>
+      {# An untitled draft's link is "Untitled draft" on every row; the id is what
+         tells them apart, and it is only in the line below, which a reader tabbing
+         between links never hears. #}
+      <a class="collection-name" href="/review/{{ draft.id }}"
+         {% if not draft.title %}aria-label="Untitled draft (draft {{ draft.id }})"{% endif %}>{{ draft.title or 'Untitled draft' }}</a>
       <span class="badge {% if state.ready %}badge-ready{% elif state.missing_only %}badge-needs{% else %}badge-problem{% endif %}">{{ state.badge }}</span>
       <div class="quiet">
         draft {{ draft.id }}
