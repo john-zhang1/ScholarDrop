@@ -21,7 +21,7 @@
       <div class="quiet">
         draft {{ draft.id }}
         {% if draft.collection_name %} · {{ draft.collection_name }}{% endif %}
-        {% if draft.last_modified %} · last changed {{ draft.last_modified }}{% endif %}
+        {% if draft.last_modified %} · last changed <time datetime="{{ draft.last_modified_iso }}">{{ draft.last_modified }}</time>{% endif %}
         {% if draft.filenames %} · {{ draft.filenames | join(', ') }}{% else %} · no file attached{% endif %}
       </div>
       {% if state.blockers %}

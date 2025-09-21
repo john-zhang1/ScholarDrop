@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,34 @@ class Draft:
     last_modified: str
     filenames: list[str]
     readiness: Readiness = field(default_factory=Readiness)
+    #: The raw value, for the `<time datetime="...">` attribute.
+    last_modified_iso: str = ""
+
+
+def format_timestamp(raw: str | None) -> str:
+    """A draft's last-changed time, precise enough to tell two of them apart.
+
+    This used to be `raw[:10]` -- the date and nothing else -- so a dozen drafts
+    started in one testing session all read "last changed 2026-06-04" and looked
+    like the same thing saved repeatedly. They were a dozen separate submissions
+    minutes apart. Truncation invented a pattern that was not in the data.
+
+    DSpace sends UTC (`2026-07-28T06:37:16.538Z`). It is rendered as UTC and
+    labelled as such: converting to the server's timezone would be a guess about
+    where the reader is, and an unlabelled hour is worse than an honest one.
+    """
+    if not raw:
+        return ""
+    text = raw.strip()
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        # An unparseable timestamp is still information; show what came back
+        # rather than dropping it or pretending to a precision we do not have.
+        return text
+    if moment.tzinfo is None:
+        return moment.strftime("%Y-%m-%d %H:%M")
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _first_value(sections: dict[str, Any], metadata_field: str) -> str:
@@ -129,7 +158,8 @@ async def _to_draft(
         id=item.id,
         title=_first_value(item.sections, TITLE_FIELD),
         collection_name=collection_name,
-        last_modified=(item.last_modified or "")[:10],
+        last_modified=format_timestamp(item.last_modified),
+        last_modified_iso=item.last_modified or "",
         filenames=_filenames(item.sections),
         readiness=assess(item, labels, labelled=labelled),
     )

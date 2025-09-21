@@ -175,3 +175,64 @@ def test_the_form_config_is_read_once_for_a_page_of_drafts(signed_in, fake_dspac
 
     definitions = [c for c in fake_dspace.calls if c[0] == "submission_definition"]
     assert len(definitions) == 1
+
+
+# ---- when a draft was last changed -----------------------------------------
+
+
+def test_the_time_is_shown_not_just_the_date() -> None:
+    """Truncating to the date made a dozen separate drafts look like one."""
+    from scholardrop.routes.drafts import format_timestamp
+
+    assert format_timestamp("2026-07-28T06:37:16.538Z") == "2026-07-28 06:37 UTC"
+
+
+def test_an_offset_is_converted_rather_than_believed() -> None:
+    from scholardrop.routes.drafts import format_timestamp
+
+    # 09:31 CST is 14:31 UTC; showing "09:31 UTC" would be a lie.
+    assert format_timestamp("2026-07-28T09:31:21-05:00") == "2026-07-28 14:31 UTC"
+
+
+def test_a_timestamp_without_a_zone_is_not_labelled_with_one() -> None:
+    from scholardrop.routes.drafts import format_timestamp
+
+    assert format_timestamp("2026-07-28T06:37:16") == "2026-07-28 06:37"
+
+
+def test_an_unreadable_timestamp_is_passed_through_not_dropped() -> None:
+    from scholardrop.routes.drafts import format_timestamp
+
+    assert format_timestamp("sometime last Tuesday") == "sometime last Tuesday"
+    assert format_timestamp(None) == ""
+    assert format_timestamp("") == ""
+
+
+def test_two_drafts_from_the_same_day_read_differently(signed_in, fake_dspace) -> None:
+    """The bug as it was reported: same day, same displayed timestamp."""
+    from scholardrop.dspace.models import WorkspaceItem
+    from tests.fakes import workspaceitem_payload
+
+    def at(wsi_id: str, when: str) -> WorkspaceItem:
+        payload = workspaceitem_payload(wsi_id)
+        payload["lastModified"] = when
+        return WorkspaceItem.from_payload(payload)
+
+    given_drafts(
+        fake_dspace,
+        at("7", "2026-06-04T19:39:47Z"),
+        at("8", "2026-06-04T19:41:08Z"),
+    )
+
+    body = signed_in.get("/drafts/list").text
+
+    assert "2026-06-04 19:39 UTC" in body
+    assert "2026-06-04 19:41 UTC" in body
+
+
+def test_the_raw_timestamp_rides_along_for_machines(signed_in, fake_dspace) -> None:
+    given_drafts(fake_dspace, make_workspaceitem("7"))
+
+    body = signed_in.get("/drafts/list").text
+
+    assert '<time datetime="2026-07-28T06:37:16.538Z">' in body
