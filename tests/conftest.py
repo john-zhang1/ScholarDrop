@@ -116,12 +116,35 @@ def app(shipped_config_dir: Path, tmp_path: Path, fake_dspace, fake_extractor):
         secret_key="test-secret",
         upload_dir=tmp_path / "uploads",
         session_cookie_secure=False,
+        # Never the repo's real one: a developer who has run the harvester would
+        # otherwise be testing against whatever their DSpace happens to hold.
+        dedup_checksum_index_path=tmp_path / "checksums.sqlite",
     )
     return create_app(
         settings,
         client_factory=lambda instance: fake_dspace,
         extractor=fake_extractor,
     )
+
+
+@pytest.fixture
+def checksum_index(app):
+    """Build the duplicate index the app is configured to read (DESIGN.md §12).
+
+    A factory rather than a fixture value, because the digest under test is the
+    one of whatever the test uploads.
+    """
+    from scholardrop.dedup.index import ChecksumIndex, IndexedBitstream, index_path_for
+
+    def _build(*rows: IndexedBitstream, instance_key: str = "shareok", base_url: str | None = None):
+        # Written where *that instance* will look for it, and stamped with its
+        # base_url -- an index harvested from anywhere else is deliberately refused.
+        instance = app.state.registry.instance(instance_key)
+        path = index_path_for(app.state.settings.dedup_checksum_index_path, instance_key)
+        with ChecksumIndex.create(path, base_url=base_url or instance.base_url) as index:
+            index.upsert(rows)
+
+    return _build
 
 
 @pytest.fixture

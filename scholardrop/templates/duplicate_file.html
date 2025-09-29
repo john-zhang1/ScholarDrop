@@ -1,0 +1,11 @@
+{# The no-JavaScript rendering of the same warning: a page rather than a swap. #}
+{% extends "base.html" %}
+{% block title %}This file is already in the repository &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Upload a PDF</h1>
+<div id="upload-panel">
+  {% include "partials/duplicate_file.html" %}
+</div>
+<p><a class="quiet" href="/drafts">Your drafts</a> · <a class="quiet" href="/browse">Choose a different collection</a></p>
+{% endblock %}

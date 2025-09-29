@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
@@ -115,6 +116,28 @@ async def dspace_client(request: Request, session: Session) -> AsyncIterator[DSp
         session.xsrf_token = client.xsrf_token
         request.app.state.sessions.save(session)
         await client.aclose()
+
+
+def release_draft(request: Request, session: Session, wsi_id: str) -> None:
+    """Let go of everything this process holds for one draft.
+
+    Every exit from the flow -- deposited, discarded, cancelled after a duplicate
+    warning -- ends here, so that "an uploaded thesis is removed the moment it has
+    no further purpose" is one implementation rather than one per route. It does
+    **not** touch DSpace: whether the draft itself survives is the caller's
+    decision, and after a deposit it must.
+
+    Only this draft's file goes. A session can be part-way through several in
+    several tabs, and taking the wrong one leaves another tab pointing at a file
+    that is no longer there.
+    """
+    request.app.state.extractions.forget(session.id, wsi_id)
+    if session.workspaceitem_id == wsi_id:
+        session.workspaceitem_id = None
+    stored = session.forget_submission(wsi_id).get("path")
+    if stored:
+        Path(stored).unlink(missing_ok=True)
+    request.app.state.sessions.save(session)
 
 
 def page_context(request: Request, **extra: Any) -> dict[str, Any]:

@@ -4,10 +4,16 @@ Three rules, all of them because the browser is not to be trusted: the file is
 validated by **magic bytes** rather than its extension or Content-Type, it is
 capped while it streams (never read whole into memory first), and it lands in a
 random per-session directory whose name is not the session id.
+
+The digests for duplicate detection (DESIGN.md §12) are computed here, in the
+same pass. Hashing costs a couple of milliseconds per megabyte and this loop
+already has every byte in hand -- doing it later would mean reading the whole
+file back off disk for no gain.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import secrets
@@ -48,6 +54,13 @@ class StoredUpload:
     path: Path
     filename: str
     size: int
+    #: MD5 because that is what DSpace stores for every bitstream, and the
+    #: duplicate index can only match like with like -- not because MD5 is a good
+    #: hash. Nothing here is a security decision: this digest answers "is this the
+    #: same file the repository already has?", never "is this file trustworthy?".
+    md5: str = ""
+    #: SHA-256 for our own records, since the bytes were already going past.
+    sha256: str = ""
 
     def read_bytes(self) -> bytes:
         return self.path.read_bytes()
@@ -98,6 +111,10 @@ async def store_upload(upload: UploadStream, *, directory: Path, max_bytes: int)
     # alone. Buffer until there is enough to judge, then judge once.
     head = b""
     checked = False
+    # usedforsecurity=False says what this MD5 is for: matching DSpace's stored
+    # digest, on a platform that may refuse the algorithm otherwise (FIPS mode).
+    md5 = hashlib.md5(usedforsecurity=False)
+    sha256 = hashlib.sha256()
 
     try:
         with target.open("wb") as sink:
@@ -105,6 +122,8 @@ async def store_upload(upload: UploadStream, *, directory: Path, max_bytes: int)
                 chunk = await upload.read(CHUNK)
                 if not chunk:
                     break
+                md5.update(chunk)
+                sha256.update(chunk)
                 if not checked:
                     head += chunk
                     if len(head) >= len(PDF_MAGIC):
@@ -137,7 +156,13 @@ async def store_upload(upload: UploadStream, *, directory: Path, max_bytes: int)
         raise UploadRejected("That file is not a PDF. ScholarDrop accepts a single PDF.")
 
     log.info("stored upload %s (%d bytes)", target.name, size)
-    return StoredUpload(path=target, filename=filename, size=size)
+    return StoredUpload(
+        path=target,
+        filename=filename,
+        size=size,
+        md5=md5.hexdigest(),
+        sha256=sha256.hexdigest(),
+    )
 
 
 def discard_upload_dir(upload_dir: Path, session: Any) -> None:

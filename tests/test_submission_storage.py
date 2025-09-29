@@ -143,3 +143,34 @@ async def test_a_file_too_short_to_be_a_pdf_is_refused(directory: Path) -> None:
         await store_upload(FakeUpload("tiny.pdf", b"%PD"), directory=directory, max_bytes=1024)
 
     assert list(directory.iterdir()) == []
+
+
+# ---- digests for duplicate detection (DESIGN.md §12) ------------------------
+
+
+async def test_the_upload_is_hashed_as_it_streams(directory: Path) -> None:
+    """MD5 because that is what DSpace stores for every bitstream; SHA-256
+    because the bytes were already going past. Computed in the copy loop, so a
+    100 MB thesis is never read back off disk to be hashed."""
+    import hashlib
+
+    content = b"%PDF-1.7\n" + b"x" * 5000
+    stored = await store_upload(
+        FakeUpload("thesis.pdf", content), directory=directory, max_bytes=1024 * 1024
+    )
+
+    assert stored.md5 == hashlib.md5(content, usedforsecurity=False).hexdigest()
+    assert stored.sha256 == hashlib.sha256(content).hexdigest()
+
+
+async def test_the_digest_covers_a_file_that_arrives_in_dribs(directory: Path) -> None:
+    """`read()` may hand back less than asked for, and a hash of the first chunk
+    alone would match a different file entirely."""
+    import hashlib
+
+    content = b"%PDF-1.7\n" + bytes(range(256)) * 40
+    stored = await store_upload(
+        FakeUpload("thesis.pdf", content, chunk=7), directory=directory, max_bytes=1024 * 1024
+    )
+
+    assert stored.md5 == hashlib.md5(content, usedforsecurity=False).hexdigest()

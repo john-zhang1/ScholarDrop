@@ -12,12 +12,14 @@ from scholardrop.dspace.errors import (
 )
 from scholardrop.dspace.models import (
     AuthStatus,
+    Bitstream,
     Collection,
     CollectionLicense,
     Community,
     DepositResult,
     DSpaceObject,
     EPerson,
+    Item,
     Page,
     PageInfo,
     VocabularyEntry,
@@ -27,6 +29,7 @@ from scholardrop.dspace.models import (
 
 __all__ = [
     "AuthStatus",
+    "Bitstream",
     "Collection",
     "CollectionLicense",
     "Community",
@@ -40,6 +43,7 @@ __all__ = [
     "DSpaceValidationError",
     "DepositResult",
     "EPerson",
+    "Item",
     "Page",
     "PageInfo",
     "ValidationIssue",

@@ -9,6 +9,10 @@ state. It also means the ACL is re-checked by DSpace itself at create time
 
 Extraction runs in the background while the browser polls, because it is the slow
 part and it must never be able to block the submission.
+
+The exact-file duplicate check (DESIGN.md §12, layer 1) lands here too. It is a
+*warning*: the draft and its file are already in DSpace by the time it is shown,
+and both choices offered -- carry on, or discard -- are the user's to make.
 """
 
 from __future__ import annotations
@@ -19,11 +23,13 @@ import logging
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
+from scholardrop.dedup.check import exact_file_matches
 from scholardrop.dspace import DSpaceError, DSpaceForbidden
 from scholardrop.routes.deps import (
     DraftId,
     dspace_client,
     is_htmx,
+    release_draft,
     render,
     require_session,
     session_instance,
@@ -137,6 +143,11 @@ async def upload(
                 status=502,
             )
 
+        # Layer 1, while the client is still open. It runs before extraction is
+        # started so the answer is on screen at once (DESIGN.md §12), and it never
+        # raises: `exact_file_matches` turns every failure into "no warning".
+        duplicates = await exact_file_matches(client, settings, instance, md5=stored.md5)
+
     session.workspaceitem_id = item.id
     # Keyed by workspaceitem: a second tab starting another submission must not
     # take this one's file or collection with it.
@@ -163,6 +174,25 @@ async def upload(
         " (restricted: local processing only)" if restricted else "",
     )
 
+    if duplicates:
+        # The one place the flow deliberately stops. Not a block -- the draft is
+        # made, the file is attached, extraction is running, and "Continue" is one
+        # click -- but the progress panel auto-redirects to the review form, so a
+        # warning rendered into it would be swept away before it was read.
+        log.info(
+            "workspaceitem %s duplicates %s by checksum",
+            item.id,
+            ", ".join(match.item_uuid for match in duplicates),
+        )
+        template = "partials/duplicate_file.html" if is_htmx(request) else "duplicate_file.html"
+        return render(
+            request,
+            template,
+            wsi_id=item.id,
+            filename=stored.filename,
+            matches=duplicates,
+        )
+
     if not is_htmx(request):
         # No JavaScript: skip the progress state and let /review report on the
         # extraction when it gets there.
@@ -170,6 +200,74 @@ async def upload(
     return render(
         request, "partials/upload_progress.html", wsi_id=item.id, filename=stored.filename
     )
+
+
+@router.post("/submit/{wsi_id}/continue", response_class=HTMLResponse)
+async def proceed(request: Request, wsi_id: DraftId) -> Response:
+    """The user read the duplicate warning and decided to submit anyway.
+
+    A POST rather than a link, and logged, because "somebody was told this file is
+    already here and deposited it regardless" is exactly the thing a repository
+    manager asks about afterwards.
+    """
+    session = require_session(request)
+    log.info(
+        "%s continued past a duplicate warning on workspaceitem %s",
+        session.eperson_name,
+        wsi_id,
+    )
+    if is_htmx(request):
+        return Response(status_code=204, headers={"HX-Redirect": f"/review/{wsi_id}"})
+    return RedirectResponse(f"/review/{wsi_id}", status_code=303)
+
+
+@router.post("/submit/{wsi_id}/cancel", response_class=HTMLResponse)
+async def cancel(request: Request, wsi_id: DraftId) -> Response:
+    """Discard the draft the duplicate warning was about, and offer another file.
+
+    The draft exists in DSpace by the time the warning is shown, so backing out
+    has to delete it -- otherwise every dismissed warning leaves a half-made
+    submission behind, which is exactly the clutter `/drafts` and
+    `scripts/prune_drafts.py` already exist to clean up.
+
+    Whose draft it is, is DSpace's question and not ours: the DELETE goes out as
+    the signed-in user, so somebody else's id answers 403 and lands in the failure
+    path below. `release_draft` only ever touches *this* session's own state, so
+    there is nothing for a guessed id to reach here either.
+    """
+    session = require_session(request)
+    failed = False
+    async with dspace_client(request, session) as client:
+        try:
+            await client.delete_workspaceitem(wsi_id)
+        except DSpaceError as exc:
+            # The draft may simply be un-deletable (a DSpace bug, a policy, or not
+            # this user's). Say so and point at /drafts rather than pretending it
+            # is gone.
+            log.warning(
+                "could not discard workspaceitem %s after a duplicate warning: %s", wsi_id, exc
+            )
+            failed = True
+        else:
+            log.info("discarded workspaceitem %s after a duplicate warning", wsi_id)
+
+    release_draft(request, session, wsi_id)
+
+    if failed:
+        response = render(
+            request,
+            "partials/upload_form.html",
+            error="The upload was abandoned, but the repository would not remove "
+            "the draft it had already created. It is listed under Drafts.",
+            offer_restricted=offers_restricted(request),
+        )
+        response.status_code = 502
+        return response
+    if is_htmx(request):
+        return render(
+            request, "partials/upload_form.html", offer_restricted=offers_restricted(request)
+        )
+    return RedirectResponse("/submit", status_code=303)
 
 
 @router.get("/submit/status/{wsi_id}", response_class=HTMLResponse)

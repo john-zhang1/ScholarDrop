@@ -107,6 +107,127 @@ class Collection(DSpaceObject):
     """A submission target."""
 
 
+class Bitstream(BaseModel):
+    """One file. `checksum` is what the duplicate index is built on (DESIGN.md §12).
+
+    DSpace records the algorithm alongside the value (`{"checkSumAlgorithm":
+    "MD5", "value": "..."}`), and it is kept rather than assumed: comparing an MD5
+    we computed against a digest of some other algorithm would be a false match
+    dressed up as a certainty.
+    """
+
+    uuid: str
+    name: str = ""
+    size_bytes: int = 0
+    checksum: str = ""
+    checksum_algorithm: str = ""
+    bundle_name: str = ""
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any], *, bundle_name: str = "") -> Bitstream:
+        checksum = payload.get("checkSum") or {}
+        return cls(
+            uuid=str(payload.get("uuid") or payload.get("id") or ""),
+            name=str(payload.get("name") or ""),
+            size_bytes=int(payload.get("sizeBytes") or 0),
+            checksum=str(checksum.get("value") or "") if isinstance(checksum, dict) else "",
+            checksum_algorithm=(
+                str(checksum.get("checkSumAlgorithm") or "") if isinstance(checksum, dict) else ""
+            ),
+            bundle_name=str(payload.get("bundleName") or bundle_name or ""),
+        )
+
+
+class Item(DSpaceObject):
+    """An archived item, as Discovery hands it back.
+
+    `bundles` is populated only when the request asked for `embed=bundles/bitstreams`;
+    `bundles_complete` says whether what arrived is all of it -- an embedded
+    bitstream list is itself a page, so a bundle with more files than the embed's
+    page size arrives truncated and has to be re-read (DESIGN.md §12).
+    """
+
+    metadata: dict[str, Any] = Field(default_factory=dict, repr=False)
+    last_modified: str | None = None
+    bundles_link: str | None = None
+    bitstreams: list[Bitstream] = Field(default_factory=list)
+    bundles_embedded: bool = False
+    bundles_complete: bool = True
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> Item:
+        base = DSpaceObject.from_payload(payload)
+        bitstreams, embedded, complete = _embedded_bitstreams(payload)
+        return cls(
+            **base.model_dump(),
+            metadata=payload.get("metadata") or {},
+            last_modified=payload.get("lastModified"),
+            bundles_link=_link(payload, "bundles"),
+            bitstreams=bitstreams,
+            bundles_embedded=embedded,
+            bundles_complete=complete,
+        )
+
+    def first(self, metadata_field: str) -> str:
+        """First value of a metadata field, or "" -- metadata is
+        `{"dc.title": [{"value": ...}]}`.
+
+        *First*, not *only*: a repeated field's `place 0` is not necessarily the
+        one you want. Real data on SHAREOK has 35 items whose `dc.date.accessioned`
+        reads `["today", "2019-07-02T19:20:13Z"]`. Use `values()` where every
+        value matters.
+        """
+        return next(iter(self.values(metadata_field)), "")
+
+    def values(self, metadata_field: str) -> list[str]:
+        """Every non-empty value of a metadata field, in `place` order."""
+        entries = self.metadata.get(metadata_field) or []
+        if not isinstance(entries, list):
+            return []
+        return [
+            str(entry["value"])
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("value")
+        ]
+
+    def in_bundle(self, bundle_name: str) -> list[Bitstream]:
+        return [b for b in self.bitstreams if b.bundle_name == bundle_name]
+
+
+def _embedded_bitstreams(payload: dict[str, Any]) -> tuple[list[Bitstream], bool, bool]:
+    """Bitstreams from `embed=bundles/bitstreams`, and whether they are all of them.
+
+    The shape is three levels of HAL: `_embedded.bundles._embedded.bundles[]`,
+    each with `_embedded.bitstreams._embedded.bitstreams[]` plus its own `page`
+    block. Returns (bitstreams, was the embed there at all, is it complete).
+    """
+    bundles_wrapper = (payload.get("_embedded") or {}).get("bundles")
+    if not isinstance(bundles_wrapper, dict):
+        return [], False, True
+    bundles = (bundles_wrapper.get("_embedded") or {}).get("bundles")
+    if not isinstance(bundles, list):
+        return [], False, True
+
+    found: list[Bitstream] = []
+    complete = True
+    for bundle in bundles:
+        if not isinstance(bundle, dict):
+            continue
+        name = str(bundle.get("name") or "")
+        wrapper = (bundle.get("_embedded") or {}).get("bitstreams")
+        if not isinstance(wrapper, dict):
+            complete = False
+            continue
+        entries = (wrapper.get("_embedded") or {}).get("bitstreams") or []
+        for entry in entries:
+            if isinstance(entry, dict):
+                found.append(Bitstream.from_payload(entry, bundle_name=name))
+        info = PageInfo.model_validate(wrapper.get("page") or {})
+        if info.has_next:
+            complete = False
+    return found, True, complete
+
+
 class EPerson(BaseModel):
     uuid: str
     name: str = ""
@@ -268,6 +389,29 @@ class DepositResult(BaseModel):
     @property
     def entered_workflow(self) -> bool:
         return not self.archived
+
+
+def parse_search(payload: dict[str, Any], factory: Any) -> Page[Any]:
+    """Build a Page from `discover/search/objects`.
+
+    Discovery wraps its results twice: the response embeds a `searchResult`, whose
+    own `_embedded.objects` are hit wrappers, and the thing a caller wants is each
+    wrapper's `_embedded.indexableObject`. The `page` block lives on the inner
+    searchResult, not the outer response -- reading the outer one gives an empty
+    PageInfo and a walk that stops after the first page.
+    """
+    search_result = (payload.get("_embedded") or {}).get("searchResult")
+    if not isinstance(search_result, dict):
+        return Page(items=[], info=PageInfo.model_validate(payload.get("page") or {}))
+    hits = (search_result.get("_embedded") or {}).get("objects") or []
+    items = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        indexable = (hit.get("_embedded") or {}).get("indexableObject")
+        if isinstance(indexable, dict):
+            items.append(factory(indexable))
+    return Page(items=items, info=PageInfo.model_validate(search_result.get("page") or {}))
 
 
 def parse_page(

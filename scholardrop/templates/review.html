@@ -47,6 +47,10 @@
 </div>
 {% endif %}
 
+{% if duplicates %}
+  {% include "partials/duplicate_panel.html" %}
+{% endif %}
+
 {% if deposit_error %}
 <div class="notice notice-missing" role="alert">
   <p><strong>{{ deposit_error }}</strong></p>

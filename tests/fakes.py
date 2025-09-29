@@ -21,13 +21,14 @@ from scholardrop.dspace import (
     Community,
     DepositResult,
     DSpaceAuthError,
+    DSpaceNotFound,
     EPerson,
     Page,
     PageInfo,
     VocabularyEntry,
     WorkflowItem,
 )
-from scholardrop.dspace.models import AuthStatus, WorkspaceItem
+from scholardrop.dspace.models import AuthStatus, Item, WorkspaceItem
 from scholardrop.extract.mapper import map_metadata
 from scholardrop.extract.models import ExtractedMetadata
 from scholardrop.submission.jobs import ExtractionResult
@@ -311,6 +312,13 @@ class FakeDSpaceClient:
             uuid="item-1", name="A Deposited Thesis", handle="11244/9999"
         )
 
+        # Duplicate detection (phase 4c). `search_items` answers with whatever is
+        # in `search_results`; `missing_items` is how a test makes an indexed hit
+        # turn out to be gone from the repository.
+        self.search_results: list[Item] = []
+        self.items_by_uuid: dict[str, Any] = {}
+        self.missing_items: set[str] = set()
+
         # Recorded interactions
         self.calls: list[tuple[str, tuple, dict]] = []
         self.closed = False
@@ -493,4 +501,12 @@ class FakeDSpaceClient:
 
     async def item(self, uuid_or_href: str) -> Collection:
         self._record("item", uuid_or_href)
-        return self.archived_item
+        if uuid_or_href in self.missing_items:
+            raise DSpaceNotFound("gone", path=f"/core/items/{uuid_or_href}")
+        return self.items_by_uuid.get(uuid_or_href) or self.archived_item
+
+    # -- duplicate detection (phase 4c) -----------------------------------
+
+    async def search_items(self, query: str | None = None, **kwargs: Any) -> Page:
+        self._record("search_items", query, **kwargs)
+        return page_of(self.search_results, size=kwargs.get("size", 20))

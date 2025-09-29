@@ -55,6 +55,19 @@ class Instance(BaseModel):
     base_url: str
     mapping_profile: str
     contact_email: str | None = None
+    # Where a *person* reads this repository, as opposed to where the API lives.
+    # They are the same host in production (`https://shareok.org/server` ->
+    # `https://shareok.org`) and different ones in development, where the Angular
+    # UI is on another port entirely -- so it is derived by default and
+    # overridable, rather than assumed. Only used to link to an item a duplicate
+    # warning names (DESIGN.md §12); nothing depends on it being reachable.
+    ui_url: str | None = None
+    # Where this repository's checksum index lives, if not beside the others.
+    # Normally left unset: the path is derived from
+    # SCHOLARDROP_DEDUP_CHECKSUM_INDEX_PATH plus this instance's key, because one
+    # index describes exactly one repository (DESIGN.md §12). Set it for a
+    # repository whose index belongs on another disk.
+    dedup_checksum_index_path: str | None = None
     # Which tier 1 backend this repository's documents may go to (DESIGN.md §5):
     # cloud (Claude), local (a model on this box, zero egress), or heuristic (no
     # model at all). `llm` is the pre-3b spelling of `cloud` and still parses.
@@ -72,10 +85,45 @@ class Instance(BaseModel):
             raise ValueError("base_url must start with http:// or https://")
         return v.rstrip("/")
 
+    @field_validator("ui_url")
+    @classmethod
+    def _check_ui_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("ui_url must start with http:// or https://")
+        return v.rstrip("/")
+
     @property
     def api_url(self) -> str:
         """REST API root -- every DSpace endpoint hangs off this."""
         return f"{self.base_url}/api"
+
+    @property
+    def web_url(self) -> str:
+        """Where a browser reads this repository.
+
+        Defaults to `base_url` with DSpace's `/server` suffix removed, which is
+        right wherever the UI and the API share a host and harmless where they do
+        not (the link is a convenience beside a title that is already legible).
+        """
+        if self.ui_url:
+            return self.ui_url
+        base = self.base_url
+        return base[: -len("/server")] if base.endswith("/server") else base
+
+    def item_url(self, *, uuid: str = "", handle: str = "") -> str:
+        """A human-readable link to an item.
+
+        The uuid route is preferred: DSpace 7+ serves `/items/{uuid}` directly,
+        while `/handle/{prefix}/{suffix}` goes through a redirect -- and an item
+        that is only a draft has no handle at all.
+        """
+        if uuid:
+            return f"{self.web_url}/items/{uuid}"
+        if handle:
+            return f"{self.web_url}/handle/{handle}"
+        return ""
 
 
 class MappingProfile(BaseModel):

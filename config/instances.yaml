@@ -33,6 +33,10 @@ instances:
     base_url: http://127.0.0.1:8080/server
     mapping_profile: shareok-etd
     contact_email: shareok@ou.edu
+    # Only on this VM do the UI and the API live on different ports; everywhere
+    # else the default (base_url without /server) is right. Used to link to an
+    # item a duplicate warning names (DESIGN.md §12).
+    ui_url: http://127.0.0.1:4000
     # Heuristic here: tier 2 costs no API calls and skips the cold grammar
     # compile. Switch to cloud (or local, see docs/local-llm.md) to exercise
     # tier 1 against this instance.

@@ -20,16 +20,18 @@ complaints against the fields that caused them.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
+from scholardrop.dedup.check import title_matches
+from scholardrop.dedup.matches import matches_from_section, section_is_configured
 from scholardrop.dspace import DSpaceError, DSpaceValidationError
 from scholardrop.routes.deps import (
     DraftId,
     dspace_client,
+    release_draft,
     render,
     require_session,
     session_instance,
@@ -88,21 +90,25 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
     instance = session_instance(request, session)
     cache = request.app.state.form_configs
 
-    async with dspace_client(request, session) as client:
-        live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
-        licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
-
     job = request.app.state.extractions.get(session.id, wsi_id)
     # Only a finished extraction pre-fills. A running one leaves the form as
     # DSpace has it and says so -- the user can start typing meanwhile.
     mapped = job.mapped if job and job.state == "done" else None
-    form = build_form(
-        live.item,
-        live.configs,
-        sections=live.sections,
-        mapped=mapped,
-        vocabularies=live.vocabularies,
-    )
+
+    async with dspace_client(request, session) as client:
+        live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
+        licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
+        form = build_form(
+            live.item,
+            live.configs,
+            sections=live.sections,
+            mapped=mapped,
+            vocabularies=live.vocabularies,
+        )
+        # Inside the block: the duplicate check may need a Discovery query, and
+        # building a second client for it would mean a second CSRF/JWT round trip
+        # for one search.
+        duplicates = await _duplicates(request, client, instance, live.item, form)
 
     session.workspaceitem_id = live.item.id
     request.app.state.sessions.save(session)
@@ -116,6 +122,7 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
         license_checked=form.license_granted,
         extraction=job.metadata if job else None,
         filename=(job.filename if job else None) or session.submission(wsi_id).get("filename"),
+        duplicates=duplicates,
     )
 
 
@@ -299,16 +306,9 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         session.eperson_name,
         "archived" if result.archived else "entered workflow",
     )
-    request.app.state.extractions.forget(session.id, wsi_id)
-    if session.workspaceitem_id == wsi_id:
-        session.workspaceitem_id = None
     # The repository has the file now, so the local copy has no further purpose
-    # (DESIGN.md §8). Only *this* submission's file goes -- the session may still
-    # be mid-flow on another one, and its file must survive.
-    stored = session.forget_submission(wsi_id).get("path")
-    if stored:
-        Path(stored).unlink(missing_ok=True)
-    request.app.state.sessions.save(session)
+    # (DESIGN.md §8).
+    release_draft(request, session, wsi_id)
 
     return render(
         request,
@@ -371,6 +371,76 @@ async def add_row(
         value=FormValue(),
         row_index=None,
     )
+
+
+def title_on(form: Any, profile: Any) -> str:
+    """The title this draft currently claims, prefill included.
+
+    Read off the built form rather than out of the workspaceitem, because on the
+    first visit the extracted title has not been saved yet -- and a duplicate
+    panel that only worked on a resumed draft would be missing from every
+    submission it was designed for.
+
+    Which metadata field carries a title is the instance's mapping profile's
+    answer, not a constant here (`dc.title` is only the usual one).
+    """
+    metadata_field = profile.metadata_field("title") or "dc.title"
+    for section in form.editable_sections:
+        for field_ in section.fields:
+            if field_.config.metadata_field != metadata_field:
+                continue
+            for value in field_.values:
+                if value.value.strip():
+                    return value.value.strip()
+    return ""
+
+
+async def _duplicates(
+    request: Request, client: Any, instance: Any, item: Any, form: Any
+) -> list[Any]:
+    """Anything already in the repository that this draft might repeat.
+
+    Two sources, and the repository's own is always preferred: DSpace's Basic
+    Duplicate Detection is a Solr query against normalised titles with the
+    repository's own configured tolerance, which is a better answer than a phrase
+    search filtered here. ScholarDrop only asks for itself when the step is not
+    configured at all -- an *empty* section means the detector ran and found
+    nothing, and overriding that with a cruder check would be replacing a good
+    answer with a worse one.
+
+    Never raises, and the blanket `except` is the point rather than an oversight:
+    this panel is decoration on a page that must render, and the review form is
+    where a user's unsaved edits live. Losing the form to a fault in an advisory
+    extra would cost them work; losing the extra costs a warning they can still get
+    at deposit time.
+    """
+    settings = request.app.state.settings
+    if not settings.dedup_enabled:
+        return []
+    try:
+        if section_is_configured(item.sections):
+            return matches_from_section(item.sections, url_for=instance.item_url)[
+                : settings.dedup_max_matches
+            ]
+
+        title = title_on(form, request.app.state.registry.profile_for(instance))
+        if not title:
+            return []
+        # The draft's own item is not archived yet, so it should not come back from
+        # Discovery -- but a resumed draft on a versioned item could, and naming a
+        # submission as its own duplicate would be pure noise.
+        own_uuid = str((item.raw.get("_links") or {}).get("item", {}).get("href", "")).rsplit(
+            "/", 1
+        )[-1]
+        return await title_matches(client, settings, instance, title=title, exclude_uuid=own_uuid)
+    except Exception as exc:  # noqa: BLE001 -- see the docstring
+        log.warning(
+            "duplicate check failed for workspaceitem %s (%s: %s); rendering without it",
+            item.id,
+            type(exc).__name__,
+            exc,
+        )
+        return []
 
 
 async def _collection_name(client: Any, item: Any, *, cache: Any, instance_key: str) -> str:

@@ -1,0 +1,44 @@
+{# The exact-file warning (DESIGN.md §12, layer 1). Swapped into #upload-panel in
+   place of the progress state, because that state redirects to /review on its
+   next poll and would carry this away unread. Extraction is already running; both
+   buttons below are ordinary exits, and neither is the "safe" one by default. #}
+<div class="notice notice-missing" role="alert">
+  <p>
+    <strong>{{ instance.name if instance else 'The repository' }} already has this exact file.</strong>
+    {{ filename or 'The PDF you uploaded' }} is byte-for-byte identical to
+    {{ 'a file' if matches | length == 1 else 'files' }} already deposited{{ ':' if matches else '.' }}
+  </p>
+
+  <ul class="plain duplicate-list">
+    {% for match in matches %}
+    <li>
+      {% if match.url %}<a href="{{ match.url }}">{{ match.display_title }}</a>
+      {% else %}<strong>{{ match.display_title }}</strong>{% endif %}
+      {% if match.handle %}<span class="quiet">· {{ match.handle }}</span>{% endif %}
+      {% if match.filename %}<span class="quiet">· stored as {{ match.filename }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <p class="quiet">
+    This is a warning, not a refusal — a preprint and its published version, or the
+    same paper in two collections, are both legitimate. Draft {{ wsi_id }} and your
+    file are already in the repository; nothing has been deposited.
+  </p>
+</div>
+
+{# Two ordinary exits, neither of them the default: the person submitting knows
+   whether this is a real duplicate and this code does not. The discard side is
+   marked destructive because it deletes the draft in the repository. #}
+<div class="actions duplicate-actions">
+  <form method="post" action="/submit/{{ wsi_id }}/continue"
+        hx-post="/submit/{{ wsi_id }}/continue">
+    <button class="button" type="submit">Continue with this submission</button>
+  </form>
+  <form method="post" action="/submit/{{ wsi_id }}/cancel"
+        hx-post="/submit/{{ wsi_id }}/cancel"
+        hx-target="#upload-panel" hx-swap="innerHTML">
+    <button class="button danger" type="submit"
+            aria-label="Discard draft {{ wsi_id }} and choose another file">Discard and choose another file</button>
+  </form>
+</div>

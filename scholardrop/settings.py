@@ -92,6 +92,23 @@ class Settings(BaseSettings):
     # the request that pays a one-off cost.
     local_llm_warm_on_startup: bool = True
 
+    # Duplicate detection (DESIGN.md §12). Both layers are advisory and both are
+    # allowed to be off: a repository with no harvest behind it, or one that would
+    # rather not spend a Solr query per review page, still submits normally.
+    dedup_enabled: bool = True
+    # Layer 1: the exact-file check. Needs an index built by
+    # scripts/harvest_checksums.py; without the file the check is quietly skipped.
+    dedup_checksum_enabled: bool = True
+    dedup_checksum_index_path: Path = _REPO_ROOT / "var" / "checksums.sqlite"
+    # Layer 2's *fallback* only -- the repository's own duplicates section, when it
+    # has one, is free and always read. This flag governs the title query
+    # ScholarDrop runs itself when the section is absent.
+    dedup_title_query_enabled: bool = True
+    # How alike two titles must be to be shown as the same work. High on purpose:
+    # a panel that cries wolf is a panel nobody reads (dedup/titles.py).
+    dedup_title_threshold: float = 0.90
+    dedup_max_matches: int = 5
+
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 

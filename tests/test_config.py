@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from scholardrop.config import (
     ConfigError,
+    Instance,
     load_mapping_profile,
     load_registry,
 )
@@ -132,3 +134,46 @@ instances:
     assert len(registry.instances) == 2
     assert len(registry.profiles) == 1
     assert registry.profile_for(registry.instances["other"]).name == "shareok-etd"
+
+
+# ---- where a person reads the repository (DESIGN.md §12) --------------------
+
+
+def test_the_web_url_is_the_base_url_without_dspaces_server_suffix() -> None:
+    instance = Instance(
+        key="x", name="X", base_url="https://shareok.org/server", mapping_profile="p"
+    )
+    assert instance.web_url == "https://shareok.org"
+    assert instance.item_url(uuid="abc") == "https://shareok.org/items/abc"
+
+
+def test_a_ui_on_another_host_can_be_configured() -> None:
+    """True of every development box, where the API is on 8080 and the Angular UI
+    is on 4000 -- deriving it there would produce a link to the JSON."""
+    instance = Instance(
+        key="x",
+        name="X",
+        base_url="http://127.0.0.1:8080/server",
+        mapping_profile="p",
+        ui_url="http://127.0.0.1:4000/",
+    )
+    assert instance.web_url == "http://127.0.0.1:4000"
+
+
+def test_an_item_with_no_uuid_falls_back_to_its_handle() -> None:
+    instance = Instance(
+        key="x", name="X", base_url="https://shareok.org/server", mapping_profile="p"
+    )
+    assert instance.item_url(handle="11244/1") == "https://shareok.org/handle/11244/1"
+    assert instance.item_url() == ""
+
+
+def test_a_ui_url_must_be_a_url() -> None:
+    with pytest.raises(ValidationError):
+        Instance(
+            key="x",
+            name="X",
+            base_url="https://x.test/server",
+            mapping_profile="p",
+            ui_url="x.test",
+        )

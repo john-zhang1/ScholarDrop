@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -22,6 +21,7 @@ from scholardrop.dspace.models import WorkspaceItem
 from scholardrop.routes.deps import (
     DraftId,
     dspace_client,
+    release_draft,
     render,
     require_session,
     session_instance,
@@ -236,15 +236,7 @@ async def discard(request: Request, wsi_id: DraftId) -> HTMLResponse:
     async with dspace_client(request, session) as client:
         await client.delete_workspaceitem(wsi_id)
     log.info("discarded workspaceitem %s for %s", wsi_id, session.eperson_name)
-
-    request.app.state.extractions.forget(session.id, wsi_id)
-    if session.workspaceitem_id == wsi_id:
-        session.workspaceitem_id = None
     # Discarding is an exit from the flow, so the local upload goes with it rather
-    # than waiting for the TTL sweep -- and only this draft's, never another tab's.
-    stored = session.forget_submission(wsi_id).get("path")
-    if stored:
-        Path(stored).unlink(missing_ok=True)
-    request.app.state.sessions.save(session)
-
+    # than waiting for the TTL sweep.
+    release_draft(request, session, wsi_id)
     return await drafts_list(request, page=0)

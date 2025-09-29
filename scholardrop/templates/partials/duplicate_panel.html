@@ -1,0 +1,44 @@
+{# "Possibly already in the repository" (DESIGN.md §12, layer 2).
+
+   Advisory only: it sits above the form, changes nothing about it, and the
+   deposit button is unaffected. The wording draws the line the data supports --
+   the same title is a fact, a similar title is a suggestion -- because a panel
+   that overstates its case gets dismissed unread the time it is right. #}
+{# A named <section> is a landmark a screen-reader user can jump to, which suits
+   something worth reading before filling the form. Deliberately *not* role="status":
+   this is rendered with the page, and a live region announces changes to a page
+   already read -- it would be the wrong promise and, on first load, no promise at
+   all. The dynamically-swapped warning at upload is the one that needs a live
+   region, and it has one. #}
+<section class="notice notice-missing duplicate-panel"
+         aria-labelledby="duplicate-panel-heading">
+  <h2 id="duplicate-panel-heading" class="panel-heading">
+    Possibly already in {{ instance.name if instance else 'the repository' }}
+  </h2>
+  <p>
+    {{ duplicates | length }}
+    {{ 'item has' if duplicates | length == 1 else 'items have' }}
+    the same or a very similar title.
+  </p>
+
+  <ul class="plain duplicate-list">
+    {% for match in duplicates %}
+    <li>
+      {% if match.url %}<a href="{{ match.url }}">{{ match.display_title }}</a>
+      {% else %}<strong>{{ match.display_title }}</strong>{% endif %}
+      <span class="quiet">
+        · {{ 'same title' if match.exact else 'similar title' }}
+        {%- if match.issued %} · {{ match.issued }}{% endif %}
+        {%- if match.collection_name %} · {{ match.collection_name }}{% endif %}
+        {%- if match.in_progress %} · still an unfinished submission{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <p class="quiet">
+    Check whether yours is the same work before you deposit. If it is a different
+    version, a different paper with a similar name, or a deliberate second copy,
+    carry on — nothing here stops the submission.
+  </p>
+</section>

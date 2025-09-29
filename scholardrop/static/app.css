@@ -379,3 +379,17 @@ button.button[disabled] { opacity: 0.5; cursor: not-allowed; }
 .summary-value { margin-bottom: 0.2rem; }
 
 .confirm-actions .actions { margin-top: 0.5rem; }
+
+/* --- duplicate warnings (DESIGN.md §12) -------------------------------- */
+
+/* Two forms side by side, so they read as one row of choices rather than two
+   separate things to do. No new colours: the warning reuses .notice-missing and
+   the destructive side reuses .danger. */
+.duplicate-actions { align-items: flex-start; flex-wrap: wrap; }
+.duplicate-actions form { margin: 0; }
+.duplicate-list { margin: 0.6rem 0; }
+.duplicate-list li { margin-bottom: 0.35rem; }
+.duplicate-panel .quiet { font-size: 0.875rem; }
+/* The panel is a named landmark, so its label is a real heading -- sized to sit in
+   a notice rather than to compete with the page's h1. */
+.panel-heading { font-size: 1rem; margin: 0 0 0.35rem; }

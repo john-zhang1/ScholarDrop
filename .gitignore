@@ -1,4 +1,5 @@
 .venv/
+.venv-mac/
 __pycache__/
 *.pyc
 *.egg-info/
@@ -8,4 +9,6 @@ __pycache__/
 .env
 uploads/
 *.log
-docs/
+# Real ETDs for the extraction eval harness (scripts/eval_extract.py).
+tests/fixtures/etds/
+var/

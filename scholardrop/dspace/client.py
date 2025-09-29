@@ -39,17 +39,20 @@ from scholardrop.dspace.errors import (
 )
 from scholardrop.dspace.models import (
     AuthStatus,
+    Bitstream,
     Collection,
     CollectionLicense,
     Community,
     DepositResult,
     DSpaceObject,
     EPerson,
+    Item,
     Page,
     VocabularyEntry,
     WorkflowItem,
     WorkspaceItem,
     parse_page,
+    parse_search,
 )
 
 log = logging.getLogger("scholardrop.dspace")
@@ -415,6 +418,70 @@ class DSpaceClient:
     async def workflowitem(self, wfi_id: str | int) -> WorkflowItem:
         payload = await self._json("GET", f"/workflow/workflowitems/{wfi_id}")
         return WorkflowItem.from_payload(payload)
+
+    # ---- discovery and files (DESIGN.md §12) -------------------------------
+
+    async def search_items(
+        self,
+        query: str | None = None,
+        *,
+        page: int = 0,
+        size: int = 20,
+        sort: str | None = None,
+        embed: str | None = None,
+        configuration: str | None = None,
+    ) -> Page[Item]:
+        """Discovery search, scoped to items.
+
+        Results are filtered by DSpace to what this client may see, so an
+        unauthenticated crawl indexes only public items -- which is exactly what
+        the shared duplicate index is allowed to hold (DESIGN.md §12).
+
+        `sort` is `field,DESC`. Only *configured* sort fields are accepted: the
+        default configuration offers score, title, `dc.date.issued` and
+        `dc.date.accessioned`, and `lastModified` answers **422 Invalid search
+        request** despite being a field on every item (verified against 9.2).
+        """
+        params: dict[str, Any] = {"dsoType": "item", "page": page, "size": size}
+        if query:
+            params["query"] = query
+        if sort:
+            params["sort"] = sort
+        if embed:
+            params["embed"] = embed
+        if configuration:
+            params["configuration"] = configuration
+        payload = await self._json("GET", "/discover/search/objects", params=params)
+        return parse_search(payload, Item.from_payload)
+
+    async def bundles_of(self, item_uuid: str, page: int = 0, size: int = 20) -> Page[DSpaceObject]:
+        payload = await self._json(
+            "GET", f"/core/items/{item_uuid}/bundles", params={"page": page, "size": size}
+        )
+        return parse_page(payload, "bundles", DSpaceObject.from_payload)
+
+    async def bitstreams_of(
+        self, bundle_uuid: str, page: int = 0, size: int = 50
+    ) -> Page[Bitstream]:
+        payload = await self._json(
+            "GET", f"/core/bundles/{bundle_uuid}/bitstreams", params={"page": page, "size": size}
+        )
+        return parse_page(payload, "bitstreams", Bitstream.from_payload)
+
+    async def bitstreams_in_bundle(self, item_uuid: str, bundle_name: str) -> list[Bitstream]:
+        """Every bitstream of one named bundle, the slow way.
+
+        The fallback for when `embed=bundles/bitstreams` did not arrive or came
+        back truncated -- three requests instead of nothing, so it is only worth
+        paying per item that needs it.
+        """
+        found: list[Bitstream] = []
+        for bundle in await self._walk(self.bundles_of, item_uuid, size=20):
+            if bundle.name != bundle_name:
+                continue
+            for bitstream in await self._walk(self.bitstreams_of, bundle.uuid, size=50):
+                found.append(bitstream.model_copy(update={"bundle_name": bundle.name}))
+        return found
 
     # ---- submission configuration (DESIGN.md §3, "read it at runtime") -----
 

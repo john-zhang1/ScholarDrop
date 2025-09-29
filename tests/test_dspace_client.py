@@ -901,3 +901,173 @@ def test_client_never_logs_tokens(caplog) -> None:
     assert _path_of(f"{API}/authn/status") in caplog.text
     assert "super-secret-jwt" not in caplog.text
     assert "super-secret-xsrf" not in caplog.text
+
+
+# ---- discovery and files (DESIGN.md §12) ------------------------------------
+
+
+def search_result(items: list[dict], *, number: int = 0, size: int = 20, total: int | None = None):
+    """Discovery's answer shape. Note the `page` block belongs to the *inner*
+    searchResult -- reading the outer one gives a walk that stops after page 1."""
+    total = len(items) if total is None else total
+    return {
+        "page": {"number": 0, "size": 1, "totalElements": 1, "totalPages": 1},
+        "_embedded": {
+            "searchResult": {
+                "_embedded": {
+                    "objects": [
+                        {"type": "item", "_embedded": {"indexableObject": i}} for i in items
+                    ]
+                },
+                "page": {
+                    "number": number,
+                    "size": size,
+                    "totalElements": total,
+                    "totalPages": (total + size - 1) // size,
+                },
+            }
+        },
+    }
+
+
+@respx.mock
+async def test_search_items_unwraps_the_double_embed(client) -> None:
+    respx.get(f"{API}/discover/search/objects").mock(
+        return_value=httpx.Response(
+            200,
+            json=search_result(
+                [{"uuid": "i1", "name": "A Thesis", "handle": "11244/1"}], total=3, size=1
+            ),
+        )
+    )
+
+    page = await client.search_items("thesis", size=1)
+
+    assert [i.uuid for i in page.items] == ["i1"]
+    assert page.total == 3
+    assert page.has_next is True, "the page block is on the inner searchResult"
+
+
+@respx.mock
+async def test_search_items_scopes_itself_to_items(client) -> None:
+    route = respx.get(f"{API}/discover/search/objects").mock(
+        return_value=httpx.Response(200, json=search_result([]))
+    )
+
+    await client.search_items("x", sort="dc.date.accessioned,DESC", embed="bundles/bitstreams")
+
+    request = route.calls[0].request
+    assert request.url.params["dsoType"] == "item"
+    assert request.url.params["sort"] == "dc.date.accessioned,DESC"
+    assert request.url.params["embed"] == "bundles/bitstreams"
+
+
+@respx.mock
+async def test_an_empty_search_is_an_empty_page_not_a_failure(client) -> None:
+    respx.get(f"{API}/discover/search/objects").mock(
+        return_value=httpx.Response(200, json={"_embedded": {}})
+    )
+
+    assert list(await client.search_items("nothing")) == []
+
+
+@respx.mock
+async def test_embedded_bitstreams_are_read_with_their_bundle_name(client) -> None:
+    item = {
+        "uuid": "i1",
+        "name": "A Thesis",
+        "_embedded": {
+            "bundles": {
+                "_embedded": {
+                    "bundles": [
+                        {
+                            "name": "ORIGINAL",
+                            "_embedded": {
+                                "bitstreams": {
+                                    "_embedded": {
+                                        "bitstreams": [
+                                            {
+                                                "uuid": "bs-1",
+                                                "name": "thesis.pdf",
+                                                "sizeBytes": 10,
+                                                "checkSum": {
+                                                    "checkSumAlgorithm": "MD5",
+                                                    "value": "abc",
+                                                },
+                                            }
+                                        ]
+                                    },
+                                    "page": {
+                                        "number": 0,
+                                        "size": 20,
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                    },
+                                }
+                            },
+                        }
+                    ]
+                }
+            }
+        },
+    }
+    respx.get(f"{API}/discover/search/objects").mock(
+        return_value=httpx.Response(200, json=search_result([item]))
+    )
+
+    found = (await client.search_items()).items[0]
+
+    assert found.bundles_embedded and found.bundles_complete
+    assert [b.name for b in found.in_bundle("ORIGINAL")] == ["thesis.pdf"]
+    assert found.in_bundle("ORIGINAL")[0].checksum == "abc"
+
+
+@respx.mock
+async def test_a_truncated_embedded_bitstream_list_says_so(client) -> None:
+    """The one silent failure in the fast path: a bundle with more files than the
+    embed's page size arrives short, and only its own `page` block admits it."""
+    item = {
+        "uuid": "i1",
+        "_embedded": {
+            "bundles": {
+                "_embedded": {
+                    "bundles": [
+                        {
+                            "name": "ORIGINAL",
+                            "_embedded": {
+                                "bitstreams": {
+                                    "_embedded": {"bitstreams": []},
+                                    "page": {
+                                        "number": 0,
+                                        "size": 20,
+                                        "totalElements": 25,
+                                        "totalPages": 2,
+                                    },
+                                }
+                            },
+                        }
+                    ]
+                }
+            }
+        },
+    }
+    respx.get(f"{API}/discover/search/objects").mock(
+        return_value=httpx.Response(200, json=search_result([item]))
+    )
+
+    found = (await client.search_items()).items[0]
+
+    assert found.bundles_embedded is True
+    assert found.bundles_complete is False
+
+
+@respx.mock
+async def test_an_item_with_no_embed_reports_it_rather_than_no_files(client) -> None:
+    respx.get(f"{API}/discover/search/objects").mock(
+        return_value=httpx.Response(200, json=search_result([{"uuid": "i1"}]))
+    )
+
+    found = (await client.search_items()).items[0]
+
+    assert found.bundles_embedded is False
+    assert found.bitstreams == []
