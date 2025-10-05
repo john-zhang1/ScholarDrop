@@ -30,6 +30,10 @@ EXTRACTED_FIELDS: frozenset[str] = frozenset(
         "department",
         "language",
         "doc_type",
+        # Registry-carried (DESIGN.md §13.1); empty on a PDF-only submission.
+        "publisher",
+        "journal",
+        "doi",
     }
 )
 

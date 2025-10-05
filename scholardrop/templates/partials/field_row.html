@@ -54,7 +54,9 @@
   {% if value.low_confidence and value.value %}
   <span class="badge badge-check">check this — a heuristic guessed it</span>
   {% elif value.prefilled %}
-  <span class="badge">from the PDF</span>
+  {# Where it came from, not how: a value the publisher's own record supplied
+     deserves less re-checking than one read off a title page (DESIGN.md §13.1). #}
+  <span class="badge">from the {{ value.provenance or 'PDF' }}</span>
   {% endif %}
 
   {% if field.config.repeatable %}

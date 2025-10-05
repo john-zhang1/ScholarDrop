@@ -113,6 +113,7 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
     session.workspaceitem_id = live.item.id
     request.app.state.sessions.save(session)
 
+    draft = session.submission(wsi_id)
     return render(
         request,
         "review.html",
@@ -121,8 +122,15 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
         licence=licence,
         license_checked=form.license_granted,
         extraction=job.metadata if job else None,
-        filename=(job.filename if job else None) or session.submission(wsi_id).get("filename"),
+        filename=(job.filename if job else None) or draft.get("filename"),
         duplicates=duplicates,
+        # The identifier this draft was started from, if it was (DESIGN.md §13.1).
+        # Read from the session, so a draft resumed in another session simply does
+        # not carry the banner -- the values are stored in the item either way.
+        identifier=draft.get("identifier"),
+        identifier_url=draft.get("identifier_url"),
+        identifier_source=draft.get("identifier_source"),
+        registry_notice=job.registry_notice if job else None,
     )
 
 

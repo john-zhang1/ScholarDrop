@@ -100,6 +100,10 @@ class ConfigCache:
         # Same again for the collection's display name, so naming the collection a
         # draft belongs to does not cost a read on every confirm and deposit.
         self.collection_names: Any = _Expiring(ttl_seconds)
+        # Which live-import providers the instance has (DESIGN.md §13.1). Keyed by
+        # instance, read once, and expiring like the rest -- a provider added to
+        # DSpace's configuration should appear without restarting this app.
+        self.external_sources: Any = _Expiring(ttl_seconds)
 
     def _all(self) -> tuple[Any, ...]:
         return (
@@ -108,6 +112,7 @@ class ConfigCache:
             self.vocabularies,
             self.licences,
             self.collection_names,
+            self.external_sources,
         )
 
     def clear(self) -> None:

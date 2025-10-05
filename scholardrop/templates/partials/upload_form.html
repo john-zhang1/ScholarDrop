@@ -7,8 +7,25 @@
       hx-target="#upload-panel" hx-swap="innerHTML">
   <label class="dropzone-label" for="file">
     <span class="dropzone-hint">Drop a PDF here, or choose a file</span>
-    <input id="file" type="file" name="file" accept="application/pdf,.pdf" required>
+    {# Not `required`: with the identifier box below, either one is enough, and
+       the server decides which combinations it accepts (DESIGN.md §13.1). #}
+    <input id="file" type="file" name="file" accept="application/pdf,.pdf">
   </label>
+
+  {% if offer_identifier %}
+  {# The published record beats anything read off a page, so this is offered
+     first-class rather than as an extra. Either box, or both. #}
+  <div class="field identifier-field">
+    <label for="identifier">Or paste an identifier</label>
+    <p class="hint" id="hint-identifier">
+      A DOI, arXiv ID or PubMed ID — or a link containing one. The published record
+      fills the form; a PDF, if you add one, fills what the record does not carry.
+    </p>
+    <input id="identifier" type="text" name="identifier" value="{{ identifier or '' }}"
+           aria-describedby="hint-identifier"
+           placeholder="10.1038/nature12373" autocomplete="off" spellcheck="false">
+  </div>
+  {% endif %}
   {% if offer_restricted %}
   {# DESIGN.md §5: this narrows where the document may be read, never widens it.
      Ticked, the text is read by a model on this server and goes nowhere else. #}
@@ -23,7 +40,7 @@
   </label>
   {% endif %}
   <div class="actions">
-    <button class="button" type="submit">Upload and read</button>
+    <button class="button" type="submit">{{ 'Continue' if offer_identifier else 'Upload and read' }}</button>
     <span class="quiet">PDF only{% if max_bytes %}, up to {{ (max_bytes / 1024 / 1024) | round | int }} MB{% endif %}.</span>
   </div>
 </form>

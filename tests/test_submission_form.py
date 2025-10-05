@@ -20,6 +20,7 @@ from tests.fakes import (
     SUBMISSION_FORMS,
     make_workspaceitem,
     metadata_values,
+    upload_file,
 )
 
 PROFILE = MappingProfile(
@@ -125,10 +126,22 @@ def test_stored_values_are_loaded_into_their_fields() -> None:
 
 
 def test_the_upload_section_reports_its_files() -> None:
-    item = make_workspaceitem(files=[{"name": "thesis.pdf", "sizeBytes": 1024}])
+    """The filename is `dc.title` on the bitstream -- there is no `name` key."""
+    item = make_workspaceitem(files=[upload_file("thesis.pdf", 1024)])
 
-    assert form_for(item).upload_files[0]["name"] == "thesis.pdf"
+    attached = form_for(item).upload_files[0]
+    assert attached.name == "thesis.pdf"
+    assert attached.size_bytes == 1024
     assert form_for(item).license_granted is False
+
+
+def test_a_file_with_no_readable_name_is_still_a_file() -> None:
+    """Better an unnamed entry than a page that claims the draft has no file."""
+    item = make_workspaceitem(files=[{"uuid": "bs-9", "sizeBytes": 12}])
+
+    attached = form_for(item).upload_files[0]
+    assert attached.name == ""
+    assert attached.uuid == "bs-9"
 
 
 # ---- validation errors ------------------------------------------------------

@@ -115,11 +115,12 @@ def test_an_oversized_file_is_refused(with_collection, app, fake_dspace) -> None
     assert not fake_dspace.called("create_workspaceitem")
 
 
-def test_no_file_at_all_is_a_message_not_a_crash(with_collection) -> None:
+def test_no_file_and_no_identifier_is_a_message_not_a_crash(with_collection) -> None:
+    """Either input will do, but not neither (DESIGN.md §13.1)."""
     response = with_collection.post("/submit", headers=HTMX)
 
     assert response.status_code == 400
-    assert "Choose the PDF" in response.text
+    assert "Choose a PDF to deposit, paste a DOI" in response.text
 
 
 def test_a_denied_collection_renders_the_access_denied_partial(

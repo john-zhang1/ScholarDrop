@@ -68,3 +68,36 @@ def test_the_restricted_content_checkbox_reaches_the_server(
 
     _path, kwargs = fake_extractor.calls[0]
     assert kwargs["force_local"] is True
+
+
+def test_an_identifier_alone_gets_through_the_browser(
+    signed_in_page, live_app, fake_dspace, fake_extractor
+) -> None:
+    """No file at all (DESIGN.md §13.1). The dropzone used to be `required`, which
+    a browser enforces before the request is ever made -- so this is the test that
+    the identifier-only path exists from the outside, not just in the handler."""
+    page = signed_in_page
+    choose_collection(page, live_app, fake_dspace)
+
+    page.fill("input[name=identifier]", "10.1038/nature12373")
+    page.click(".dropzone button[type=submit]")
+
+    page.wait_for_url(f"{live_app}/review/42", timeout=15_000)
+    _path, kwargs = fake_extractor.calls[0]
+    assert kwargs["identifier"].value == "10.1038/nature12373"
+
+
+@pytest.mark.allow_console
+def test_a_misread_identifier_comes_back_in_the_box(signed_in_page, live_app, fake_dspace) -> None:
+    """The console line here is Chromium's own "responded with 400", which any
+    deliberate rejection produces and no configuration can silence. htmx's own
+    error is off (base.html): a rendered rejection is an answer, not a fault."""
+    page = signed_in_page
+    choose_collection(page, live_app, fake_dspace)
+
+    page.fill("input[name=identifier]", "the one about attention")
+    page.click(".dropzone button[type=submit]")
+
+    error = page.wait_for_selector("#upload-panel .error", timeout=15_000)
+    assert "not a DOI" in error.inner_text()
+    assert page.input_value("input[name=identifier]") == "the one about attention"

@@ -25,6 +25,7 @@ from typing import Any
 
 from scholardrop.dspace.models import ValidationIssue, VocabularyEntry, WorkspaceItem
 from scholardrop.extract.mapper import MappedMetadata
+from scholardrop.extract.models import TIER_LABELS, SourceTier
 
 # Section types we render as an editable metadata form. Everything else
 # (collection, upload, license, and any custom step) is shown, not edited.
@@ -143,6 +144,14 @@ class FormValue:
     value: str = ""
     prefilled: bool = False
     low_confidence: bool = False
+    # Which tier pre-filled it (DESIGN.md §13.1). Empty for a stored value or one
+    # the user typed -- those need no explanation.
+    source: SourceTier | None = None
+
+    @property
+    def provenance(self) -> str:
+        """How the page names this value's origin, or '' when it should not."""
+        return TIER_LABELS.get(self.source, "") if self.prefilled and self.source else ""
 
 
 @dataclass
@@ -232,6 +241,44 @@ class FormSection:
         return [f for f in self.fields if f.required_empty]
 
 
+@dataclass(frozen=True)
+class UploadedFile:
+    """A file already attached to the draft, as the upload section describes it.
+
+    **There is no `name` key.** `UploadBitstreamRest` (verified against 9.2, and
+    against a live draft on 2026-07-30) carries `uuid`, `metadata`, `format`,
+    `sizeBytes`, `checkSum` and `url` -- the filename is a *metadata* value,
+    `dc.title`, with `dc.source` holding the name it was uploaded under. Reading
+    `file.name` therefore always found nothing; it only looked right because the
+    page falls back to the filename this session remembers, which a resumed draft
+    does not have.
+    """
+
+    name: str = ""
+    size_bytes: int = 0
+    uuid: str = ""
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> UploadedFile:
+        metadata = payload.get("metadata") or {}
+
+        def value_of(field: str) -> str:
+            entries = metadata.get(field) or []
+            first = entries[0] if isinstance(entries, list) and entries else None
+            return str(first.get("value") or "") if isinstance(first, dict) else ""
+
+        return cls(
+            # `name` last, and only as a courtesy to anything that does send one.
+            name=value_of("dc.title") or value_of("dc.source") or str(payload.get("name") or ""),
+            size_bytes=int(payload.get("sizeBytes") or 0),
+            uuid=str(payload.get("uuid") or ""),
+        )
+
+    @property
+    def megabytes(self) -> float:
+        return round(self.size_bytes / 1024 / 1024, 1)
+
+
 @dataclass
 class Unplaced:
     """An extracted value with nowhere to go, kept visible on purpose.
@@ -266,10 +313,10 @@ class SubmissionForm:
         return [s for s in self.sections if s.editable]
 
     @property
-    def upload_files(self) -> list[dict[str, Any]]:
+    def upload_files(self) -> list[UploadedFile]:
         section = next((s for s in self.sections if s.section_type == UPLOAD_SECTION), None)
         files = (section.data if section else {}).get("files") or []
-        return [f for f in files if isinstance(f, dict)]
+        return [UploadedFile.from_payload(f) for f in files if isinstance(f, dict)]
 
     @property
     def license_granted(self) -> bool:
@@ -463,7 +510,10 @@ def _apply_prefill(form: SubmissionForm, mapped: MappedMetadata) -> None:
             )
             continue
         accepted = values if target.config.repeatable else values[:1]
-        target.values = [FormValue(value=v, prefilled=True, low_confidence=low) for v in accepted]
+        source = mapped.sources.get(metadata_field)
+        target.values = [
+            FormValue(value=v, prefilled=True, low_confidence=low, source=source) for v in accepted
+        ]
         if len(accepted) < len(values):
             form.unplaced.append(
                 Unplaced(

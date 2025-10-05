@@ -26,7 +26,7 @@
   <dt>File</dt>
   <dd>
     {% if form.upload_files %}
-      {% for file in form.upload_files %}{{ file.name or filename }}{{ ', ' if not loop.last }}{% endfor %}
+      {% for file in form.upload_files %}{{ file.name or filename or 'a file' }}{{ ', ' if not loop.last }}{% endfor %}
     {% else %}{{ filename or 'no file attached' }}{% endif %}
   </dd>
   <dt>Deposit licence</dt>

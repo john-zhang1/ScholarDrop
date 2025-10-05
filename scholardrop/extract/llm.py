@@ -38,6 +38,7 @@ from scholardrop.extract.backends import (
 )
 from scholardrop.extract.models import ExtractedMetadata, SourceTier, items, text
 from scholardrop.extract.reader import PdfDocument
+from scholardrop.identifiers.ids import IdentifierKind, UnknownIdentifier, parse_identifier
 from scholardrop.settings import Settings
 
 log = logging.getLogger("scholardrop.extract")
@@ -121,6 +122,28 @@ class LlmExtraction(BaseModel):
         description=(
             "Kind of work: 'thesis', 'dissertation', 'article', 'report', 'book chapter', "
             "or similar, if determinable."
+        ),
+    )
+    publisher: str | None = Field(
+        default=None,
+        description=(
+            "Publisher or issuing body, if the document names one. For a thesis this is "
+            "usually the university."
+        ),
+    )
+    journal: str | None = Field(
+        default=None,
+        description=(
+            "Journal, proceedings or book the work appeared in, if the document says so. "
+            "Null for a thesis or a standalone report."
+        ),
+    )
+    doi: str | None = Field(
+        default=None,
+        description=(
+            "The DOI printed in the document, as '10.xxxx/suffix' with no 'doi:' prefix "
+            "or URL around it. Only a DOI that appears in the text -- never construct or "
+            "complete one."
         ),
     )
 
@@ -368,8 +391,25 @@ def to_metadata(parsed: LlmExtraction, *, confidence: float = LLM_CONFIDENCE) ->
         department=text(parsed.department, confidence, tier),
         language=text(parsed.language, confidence, tier),
         doc_type=text(parsed.doc_type, confidence, tier),
+        publisher=text(parsed.publisher, confidence, tier),
+        journal=text(parsed.journal, confidence, tier),
+        # A DOI read off a page points at a *different work* when it is wrong, so
+        # it is normalised through the same parser the identifier box uses and
+        # dropped when it does not parse -- a malformed DOI is no DOI.
+        doi=text(_clean_doi(parsed.doi), confidence, tier),
         tier_used=tier,
     )
+
+
+def _clean_doi(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    try:
+        identifier = parse_identifier(raw)
+    except UnknownIdentifier:
+        log.info("tier 1 returned something that is not a DOI; dropping it")
+        return None
+    return identifier.value if identifier.kind is IdentifierKind.DOI else None
 
 
 def _brief(exc: ValidationError) -> str:

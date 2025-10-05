@@ -25,6 +25,8 @@ from scholardrop.extract.mapper import MappedMetadata, map_metadata
 from scholardrop.extract.models import ExtractedMetadata
 from scholardrop.extract.pipeline import extract_from_pdf
 from scholardrop.extract.reader import PdfUnreadable
+from scholardrop.identifiers.ids import Identifier
+from scholardrop.identifiers.resolvers import RecordNotFound, RegistryUnavailable, resolve
 from scholardrop.settings import Settings
 
 log = logging.getLogger("scholardrop.extract")
@@ -36,6 +38,11 @@ JobState = Literal["running", "done", "failed"]
 class ExtractionResult:
     metadata: ExtractedMetadata
     mapped: MappedMetadata
+    # What the registry step did, when there was one (DESIGN.md §13.1). A
+    # sentence for the review page rather than an exception, because a DOI that
+    # would not resolve must not cost the submitter their draft.
+    registry_notice: str | None = None
+    registry_used: bool = False
 
 
 # The seam tests substitute (like client_factory): everything the route knows
@@ -44,22 +51,73 @@ Extractor = Callable[..., Awaitable[ExtractionResult]]
 
 
 async def run_extraction(
-    path: Path,
+    path: Path | None = None,
     *,
     instance: Instance,
     settings: Settings,
     profile: MappingProfile,
     force_local: bool = False,
+    identifier: Identifier | None = None,
+    resolve_registry: bool = True,
 ) -> ExtractionResult:
-    """Read the PDF, extract, and translate the result into metadata fields.
+    """Gather what is known about this submission, and shape it for the form.
+
+    Up to two sources, run together because both are network-bound and the user
+    is watching:
+
+    * the **registry**, when an identifier was given and the repository's own
+      provider did not already resolve it (`resolve_registry=False` says it did);
+    * the **PDF**, when one was uploaded.
+
+    Precedence is DESIGN.md §13.1's: registry metadata is authoritative and the
+    document fills the fields it does not carry -- committee members, and often
+    keywords and the abstract. `ExtractedMetadata.merged_with` is where that
+    single rule lives.
 
     `force_local` is the submitter's "restricted content" answer, carried from the
-    upload form: it keeps the document off any network (DESIGN.md §5).
+    upload form: it keeps the *document* off any network (DESIGN.md §5). It does
+    not stop identifier resolution -- a DOI is not document content, and resolving
+    one says nothing about the file.
     """
-    metadata, _document = await extract_from_pdf(
-        path, instance=instance, settings=settings, force_local=force_local
+    registry_notice: str | None = None
+    registry = ExtractedMetadata()
+    extracted = ExtractedMetadata()
+
+    async def _registry() -> ExtractedMetadata:
+        nonlocal registry_notice
+        if identifier is None or not resolve_registry:
+            return ExtractedMetadata()
+        try:
+            return await resolve(identifier, settings)
+        except RecordNotFound as exc:
+            log.info("no registry record for %s: %s", identifier.display, exc)
+            registry_notice = (
+                f"No record was found for {identifier.display}, so nothing came from the registry."
+            )
+        except RegistryUnavailable as exc:
+            log.info("registry lookup failed for %s: %s", identifier.display, exc)
+            registry_notice = (
+                f"{identifier.display} could not be looked up just now, so nothing came "
+                "from the registry."
+            )
+        return ExtractedMetadata()
+
+    async def _pdf() -> ExtractedMetadata:
+        if path is None:
+            return ExtractedMetadata()
+        metadata, _document = await extract_from_pdf(
+            path, instance=instance, settings=settings, force_local=force_local
+        )
+        return metadata
+
+    registry, extracted = await asyncio.gather(_registry(), _pdf())
+    metadata = registry.merged_with(extracted)
+    return ExtractionResult(
+        metadata=metadata,
+        mapped=map_metadata(metadata, profile),
+        registry_notice=registry_notice,
+        registry_used=not registry.is_empty(),
     )
-    return ExtractionResult(metadata=metadata, mapped=map_metadata(metadata, profile))
 
 
 @dataclass
@@ -85,6 +143,11 @@ class ExtractionJob:
     @property
     def mapped(self) -> MappedMetadata | None:
         return self.result.mapped if self.result else None
+
+    @property
+    def registry_notice(self) -> str | None:
+        """What to say about the identifier, when there is something to say."""
+        return self.result.registry_notice if self.result else None
 
     @property
     def elapsed(self) -> float:

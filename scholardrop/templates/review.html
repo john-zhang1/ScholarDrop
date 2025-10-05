@@ -9,6 +9,29 @@
   is waiting in the repository until you say so.
 </p>
 
+{# Where this draft came from, when it came from an identifier (DESIGN.md §13.1).
+   Stated before anything about extraction, because it is the stronger source: a
+   registry record is the published record, not a reading of a document. #}
+{% if identifier %}
+<div class="notice" role="status">
+  <p>
+    {% if identifier_source %}
+    <strong>Started from {{ identifier }}.</strong>
+    The repository resolved it through its <code>{{ identifier_source }}</code> source and
+    filled this draft from the published record.
+    {% else %}
+    <strong>Started from {{ identifier }}.</strong>
+    Values from the published record are marked <span class="badge">from the registry record</span>.
+    {% endif %}
+    {% if identifier_url %}<a href="{{ identifier_url }}" rel="noreferrer noopener">Read the record</a>.{% endif %}
+    {% if filename %}The PDF fills in what the record does not carry.{% endif %}
+  </p>
+  {% if registry_notice %}<p>{{ registry_notice }}</p>{% endif %}
+</div>
+{% elif registry_notice %}
+<div class="notice" role="status"><p>{{ registry_notice }}</p></div>
+{% endif %}
+
 {# What extraction did or did not manage, stated plainly. #}
 {% if job and job.state == 'running' %}
 <div class="notice" role="status">
@@ -20,17 +43,22 @@
   <p><strong>{{ job.error }}</strong> The form below is the collection's form, empty —
   fill it in yourself and deposit as usual.</p>
 </div>
-{% elif extraction and extraction.tier_used.value == 'none' %}
+{% elif extraction and extraction.tier_used.value == 'none' and filename %}
 <div class="notice" role="status">
   <p><strong>Nothing could be extracted from this PDF.</strong>
   {% if extraction.fallback_reason %}<span class="quiet">({{ extraction.fallback_reason }})</span>{% endif %}
   A scanned or image-only document reads as empty — the form is yours to fill in.</p>
 </div>
+{% elif extraction and extraction.tier_used.value == 'none' and not identifier %}
+<div class="notice" role="status">
+  <p><strong>Nothing was found to pre-fill this draft with.</strong>
+  The form below is the collection's form, empty — fill it in and deposit as usual.</p>
+</div>
 {% elif form.prefilled_count %}
 <div class="notice" role="status">
   <p>
     <strong>{{ form.prefilled_count }} field{{ '' if form.prefilled_count == 1 else 's' }} pre-filled
-    from {{ filename or 'the PDF' }}.</strong>
+    from {{ filename or identifier or 'the PDF' }}.</strong>
     Anything marked <span class="badge badge-check">check this</span> was guessed rather than
     read with confidence — check it before you deposit.
   </p>
@@ -85,8 +113,8 @@
       {% if form.upload_files %}
       <ul class="plain">
         {% for file in form.upload_files %}
-        <li><strong>{{ file.name or filename }}</strong>
-          {% if file.sizeBytes %}<span class="quiet">· {{ (file.sizeBytes / 1024 / 1024) | round(1) }} MB</span>{% endif %}
+        <li><strong>{{ file.name or filename or 'a file' }}</strong>
+          {% if file.size_bytes %}<span class="quiet">· {{ file.megabytes }} MB</span>{% endif %}
         </li>
         {% endfor %}
       </ul>
@@ -131,9 +159,9 @@
 
 {% if form.unplaced %}
 <section class="unplaced">
-  <h2>Found in the PDF, not placed</h2>
+  <h2>Found, but not placed</h2>
   <p class="quiet">
-    ScholarDrop read these but this collection's form has nowhere to put them. Copy
+    ScholarDrop found these but this collection's form has nowhere to put them. Copy
     anything useful into a field above; nothing here is deposited on its own.
   </p>
   <dl class="unplaced-list">

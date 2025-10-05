@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from scholardrop.config import MappingProfile
-from scholardrop.extract.models import ExtractedMetadata
+from scholardrop.extract.models import ExtractedMetadata, SourceTier
 
 
 @dataclass
@@ -23,6 +23,10 @@ class MappedMetadata:
     # metadata field -> True when any contributing value was low confidence, so the
     # form can flag it for attention.
     low_confidence: dict[str, bool] = field(default_factory=dict)
+    # metadata field -> which tier put it there (DESIGN.md §13.1). The review form
+    # labels a pre-filled value with it, because "the publisher's record says so"
+    # and "we read it off the title page" call for different amounts of checking.
+    sources: dict[str, SourceTier] = field(default_factory=dict)
 
     def values(self, metadata_field: str) -> list[str]:
         return self.fields.get(metadata_field, [])
@@ -60,5 +64,9 @@ def map_metadata(metadata: ExtractedMetadata, profile: MappingProfile) -> Mapped
         result.low_confidence[target] = result.low_confidence.get(target, False) or (
             extracted.low_confidence
         )
+        # First contributor names the field. Two neutral fields merging into one
+        # target is the exception, and the first is the one the profile lists
+        # first -- claiming the later, weaker tier would understate the value.
+        result.sources.setdefault(target, extracted.source_tier)
 
     return result

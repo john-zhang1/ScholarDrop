@@ -361,6 +361,66 @@ class VocabularyEntry(BaseModel):
         return cls(value=value, display=str(payload.get("display") or value))
 
 
+class ExternalSource(BaseModel):
+    """One live-import provider the repository has configured (DESIGN.md §13.1).
+
+    DSpace 9.2 ships around thirty of these (crossref, datacite, arxiv, pubmed,
+    openalex...). Which are *usable* is a separate question from which are
+    listed: a provider is only as available as the network the repository sits
+    on, so an entry here is a candidate, not a promise.
+    """
+
+    id: str
+    name: str = ""
+    hierarchical: bool = False
+    self_link: str = ""
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> ExternalSource:
+        source_id = str(payload.get("id") or "")
+        return cls(
+            id=source_id,
+            name=str(payload.get("name") or source_id),
+            hierarchical=bool(payload.get("hierarchical")),
+            self_link=_self_link(payload),
+        )
+
+    def entry_uri(self, entry_id: str) -> str:
+        """The `entryValues` URI for a record, built rather than followed.
+
+        DSpace's uri-list handler regex-matches this string; it never fetches it
+        (ExternalSourceEntryItemUriListHandler). That distinction is what makes
+        DOIs work at all -- a DOI's slash makes the same URI unfetchable through
+        Tomcat, but perfectly readable inside a request body.
+        """
+        base = self.self_link.rstrip("/")
+        return f"{base}/entryValues/{entry_id}"
+
+
+class ExternalSourceEntry(BaseModel):
+    """One record a provider found, already mapped to metadata by the server."""
+
+    id: str
+    display: str = ""
+    value: str = ""
+    external_source: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    self_link: str = ""
+    raw: dict[str, Any] = Field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> ExternalSourceEntry:
+        return cls(
+            id=str(payload.get("id") or ""),
+            display=str(payload.get("display") or ""),
+            value=str(payload.get("value") or ""),
+            external_source=str(payload.get("externalSource") or ""),
+            metadata=payload.get("metadata") or {},
+            self_link=_self_link(payload),
+            raw=payload,
+        )
+
+
 class WorkflowItem(BaseModel):
     """A submission that entered the collection's review workflow."""
 

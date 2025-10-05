@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from scholardrop.extract.models import ExtractedMetadata, SourceTier, items, text
-from tests.fakes import make_workspaceitem, metadata_values
+from tests.fakes import make_workspaceitem, metadata_values, upload_file
 
 HTMX = {"HX-Request": "true"}
 
@@ -99,7 +99,7 @@ def test_stored_values_are_shown(with_collection, fake_dspace) -> None:
 
 def test_the_attached_file_is_listed(with_collection, fake_dspace) -> None:
     fake_dspace.workspaceitems["42"] = make_workspaceitem(
-        "42", files=[{"name": "thesis.pdf", "sizeBytes": 2 * 1024 * 1024}]
+        "42", files=[upload_file("thesis.pdf", 2 * 1024 * 1024)]
     )
 
     body = with_collection.get("/review/42").text

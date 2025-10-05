@@ -46,6 +46,8 @@ from scholardrop.dspace.models import (
     DepositResult,
     DSpaceObject,
     EPerson,
+    ExternalSource,
+    ExternalSourceEntry,
     Item,
     Page,
     VocabularyEntry,
@@ -295,6 +297,35 @@ class DSpaceClient:
         )
         return WorkspaceItem.from_payload(payload)
 
+    async def create_workspaceitem_from_entry(
+        self, collection_uuid: str, entry_uri: str
+    ) -> WorkspaceItem:
+        """Start a submission from a registry record the *repository* resolved.
+
+        Same endpoint as `create_workspaceitem`, with the external source entry's
+        URI as a `text/uri-list` body. DSpace fetches the record through its own
+        live-import provider and maps it with the repository's configuration --
+        which is why this is preferred over resolving the registry ourselves
+        (DESIGN.md §13.1): a ScholarDrop deposit and a DSpace import of the same
+        DOI then land in the same metadata fields.
+
+        Verified against 9.2: `ExternalSourceEntryItemUriListHandler` regex-parses
+        the URI out of the *body* and never dereferences it, so a DOI's slash is
+        fine here even though the same URI cannot be fetched through Tomcat. A
+        record the provider cannot find is a 404 (`ResourceNotFoundException`),
+        which surfaces as DSpaceNotFound -- a domain answer, not a failure.
+        """
+        payload = await self._json(
+            "POST",
+            "/submission/workspaceitems",
+            params={"owningCollection": collection_uuid, "embed": "submissionDefinition"},
+            content=entry_uri.encode(),
+            headers={"Content-Type": "text/uri-list"},
+            expected=(200, 201),
+            resource=entry_uri,
+        )
+        return WorkspaceItem.from_payload(payload)
+
     async def get_workspaceitem(self, wsi_id: str | int) -> WorkspaceItem:
         payload = await self._json(
             "GET",
@@ -484,6 +515,50 @@ class DSpaceClient:
         return found
 
     # ---- submission configuration (DESIGN.md §3, "read it at runtime") -----
+
+    # ---- external sources (DESIGN.md §13.1) --------------------------------
+
+    async def list_external_sources(self, size: int = 100) -> list[ExternalSource]:
+        """Which live-import providers this repository has configured.
+
+        Read once per instance and cached: it is repository configuration, and
+        changing it means restarting DSpace. A stock 9.2 lists about thirty.
+        """
+        payload = await self._json(
+            "GET", "/integration/externalsources", params={"size": size, "page": 0}
+        )
+        page = parse_page(payload, "externalsources", ExternalSource.from_payload)
+        return page.items
+
+    async def external_entry(self, source_id: str, entry_id: str) -> ExternalSourceEntry:
+        """One record from a provider, as the repository would import it.
+
+        Only usable for identifiers with no slash in them. Verified against 9.2:
+        Tomcat refuses an encoded slash in a path segment before Spring sees it
+        ("Invalid URI: noSlash"), and an unencoded one does not match the route --
+        so every DOI is unreadable here, which is exactly why
+        `create_workspaceitem_from_entry` builds the URI rather than fetching it.
+
+        A provider that has no such record answers **400**, not 404
+        (`LiveImportDataProvider.getExternalDataObject` -> "No record found"), so
+        both are mapped to DSpaceNotFound for the caller.
+        """
+        try:
+            payload = await self._json(
+                "GET",
+                f"/integration/externalsources/{source_id}/entryValues/{entry_id}",
+                resource=f"{source_id} entry {entry_id}",
+            )
+        except DSpaceError as exc:
+            if exc.status == 400:
+                raise DSpaceNotFound(
+                    f"{source_id} has no record for {entry_id}",
+                    method="GET",
+                    path=f"/integration/externalsources/{source_id}/entryValues/{entry_id}",
+                    status=400,
+                ) from exc
+            raise
+        return ExternalSourceEntry.from_payload(payload)
 
     async def submission_definition(self, name: str) -> dict[str, Any]:
         """A submission definition *with its sections embedded*.

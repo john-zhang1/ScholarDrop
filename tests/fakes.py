@@ -23,6 +23,8 @@ from scholardrop.dspace import (
     DSpaceAuthError,
     DSpaceNotFound,
     EPerson,
+    ExternalSource,
+    ExternalSourceEntry,
     Page,
     PageInfo,
     VocabularyEntry,
@@ -30,7 +32,7 @@ from scholardrop.dspace import (
 )
 from scholardrop.dspace.models import AuthStatus, Item, WorkspaceItem
 from scholardrop.extract.mapper import map_metadata
-from scholardrop.extract.models import ExtractedMetadata
+from scholardrop.extract.models import ExtractedMetadata, SourceTier
 from scholardrop.submission.jobs import ExtractionResult
 
 
@@ -240,6 +242,25 @@ def make_workspaceitem(wsi_id: str = "42", **kwargs: Any) -> WorkspaceItem:
     return WorkspaceItem.from_payload(workspaceitem_payload(wsi_id, **kwargs))
 
 
+def upload_file(filename: str, size_bytes: int = 1024, uuid: str = "bs-1") -> dict[str, Any]:
+    """One entry of the upload section's `files`, shaped as DSpace 9.2 sends it.
+
+    Note what is *not* here: a `name` key. `UploadBitstreamRest` has none -- the
+    filename is `dc.title` in the bitstream's metadata (confirmed against a live
+    draft, 2026-07-30). A fixture that invents one hides the bug it should catch.
+    """
+    return {
+        "uuid": uuid,
+        "sizeBytes": size_bytes,
+        "metadata": {
+            "dc.title": [{"value": filename, "language": None, "place": 0}],
+            "dc.source": [{"value": filename, "language": None, "place": 0}],
+        },
+        "accessConditions": [],
+        "format": {"mimetype": "application/pdf", "shortDescription": "Adobe PDF"},
+    }
+
+
 def metadata_values(*values: str) -> list[dict[str, Any]]:
     """Section data shape: [{"value": "..."}, ...]."""
     return [{"value": v, "language": None, "place": i} for i, v in enumerate(values)]
@@ -256,18 +277,30 @@ class FakeExtractor:
         self.metadata = ExtractedMetadata()
         self.error: Exception | None = None
         self.gate: asyncio.Event | None = None
+        self.registry_notice: str | None = None
         self.calls: list[Any] = []
 
-    def __call__(self, path: Any, **kwargs: Any) -> Any:
+    def __call__(self, path: Any = None, **kwargs: Any) -> Any:
         self.calls.append((path, kwargs))
         return self._run(kwargs["profile"])
+
+    @property
+    def last_call(self) -> tuple[Any, dict[str, Any]]:
+        if not self.calls:
+            raise AssertionError("the extractor was never called")
+        return self.calls[-1]
 
     async def _run(self, profile: Any) -> ExtractionResult:
         if self.gate is not None:
             await self.gate.wait()
         if self.error is not None:
             raise self.error
-        return ExtractionResult(metadata=self.metadata, mapped=map_metadata(self.metadata, profile))
+        return ExtractionResult(
+            metadata=self.metadata,
+            mapped=map_metadata(self.metadata, profile),
+            registry_notice=self.registry_notice,
+            registry_used=self.metadata.tier_used == SourceTier.REGISTRY,
+        )
 
 
 class FakeDSpaceClient:
@@ -311,6 +344,18 @@ class FakeDSpaceClient:
         self.archived_item = Collection(
             uuid="item-1", name="A Deposited Thesis", handle="11244/9999"
         )
+
+        # External sources / identifier-first submission (phase 8). `sources` is
+        # what the instance lists; `resolving_sources` is the subset that
+        # actually has the record -- the rest answer 404, as a real provider does
+        # when asked for the wrong kind of identifier.
+        self.external_sources: list[ExternalSource] = []
+        self.resolving_sources: set[str] = set()
+        self.external_entries: dict[tuple[str, str], ExternalSourceEntry] = {}
+        # What a draft created from a registry entry already holds.
+        self.entry_sections: dict[str, Any] = {
+            "traditionalpageone": {"dc.title": metadata_values("A Published Article")}
+        }
 
         # Duplicate detection (phase 4c). `search_items` answers with whatever is
         # in `search_results`; `missing_items` is how a test makes an indexed hit
@@ -439,6 +484,36 @@ class FakeDSpaceClient:
         self._record("get_workspaceitem", str(wsi_id))
         return self.workspaceitems.get(str(wsi_id)) or make_workspaceitem(str(wsi_id))
 
+    # -- external sources (phase 8) ---------------------------------------
+
+    async def list_external_sources(self, size: int = 100) -> list[ExternalSource]:
+        self._record("list_external_sources", size=size)
+        return list(self.external_sources)
+
+    async def external_entry(self, source_id: str, entry_id: str) -> ExternalSourceEntry:
+        self._record("external_entry", source_id, entry_id)
+        entry = self.external_entries.get((source_id, entry_id))
+        if entry is None:
+            raise DSpaceNotFound(f"{source_id} has no record for {entry_id}")
+        return entry
+
+    async def create_workspaceitem_from_entry(
+        self, collection_uuid: str, entry_uri: str
+    ) -> WorkspaceItem:
+        self._record("create_workspaceitem_from_entry", collection_uuid, entry_uri)
+        # Keyed by provider id, the way the real failure works: a provider that
+        # does not have the record answers 404 and creates nothing.
+        source_id = entry_uri.split("/externalsources/", 1)[-1].split("/", 1)[0]
+        if source_id not in self.resolving_sources:
+            raise DSpaceNotFound(f"{source_id} has no record for {entry_uri}")
+        item = make_workspaceitem(
+            self.next_workspaceitem_id,
+            collection_uuid=collection_uuid,
+            sections=self.entry_sections,
+        )
+        self.workspaceitems[item.id] = item
+        return item
+
     async def upload_bitstream(
         self,
         wsi_id: str | int,
@@ -448,9 +523,7 @@ class FakeDSpaceClient:
     ) -> WorkspaceItem:
         self._record("upload_bitstream", str(wsi_id), filename=filename, size=len(content))
         item = self.workspaceitems.get(str(wsi_id)) or make_workspaceitem(str(wsi_id))
-        item = make_workspaceitem(
-            item.id, files=[{"name": filename, "sizeBytes": len(content), "uuid": "bs-1"}]
-        )
+        item = make_workspaceitem(item.id, files=[upload_file(filename, len(content))])
         self.workspaceitems[item.id] = item
         return item
 

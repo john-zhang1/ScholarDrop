@@ -16,6 +16,7 @@ from scholardrop.dspace import (
     DSpaceAuthError,
     DSpaceClient,
     DSpaceForbidden,
+    DSpaceNotFound,
     DSpaceUnavailable,
     DSpaceValidationError,
 )
@@ -1071,3 +1072,79 @@ async def test_an_item_with_no_embed_reports_it_rather_than_no_files(client) -> 
 
     assert found.bundles_embedded is False
     assert found.bitstreams == []
+
+
+# ---- external sources (phase 8, DESIGN.md §13.1) --------------------------
+
+
+EXTERNAL_SOURCES = {
+    "_embedded": {
+        "externalsources": [
+            {
+                "id": "crossref",
+                "name": "crossref",
+                "hierarchical": False,
+                "_links": {"self": {"href": f"{API}/integration/externalsources/crossref"}},
+            },
+            {
+                "id": "arxiv",
+                "name": "arxiv",
+                "hierarchical": False,
+                "_links": {"self": {"href": f"{API}/integration/externalsources/arxiv"}},
+            },
+        ]
+    },
+    "page": {"number": 0, "size": 100, "totalElements": 2, "totalPages": 1},
+}
+
+
+@respx.mock
+async def test_the_configured_providers_are_listed(client) -> None:
+    respx.get(f"{API}/integration/externalsources").mock(
+        return_value=httpx.Response(200, json=EXTERNAL_SOURCES)
+    )
+
+    sources = await client.list_external_sources()
+
+    assert [s.id for s in sources] == ["crossref", "arxiv"]
+
+
+@respx.mock
+async def test_an_entry_uri_is_built_not_followed(client) -> None:
+    """Every DOI contains a slash, which Tomcat refuses in a path but not in a body."""
+    respx.get(f"{API}/integration/externalsources").mock(
+        return_value=httpx.Response(200, json=EXTERNAL_SOURCES)
+    )
+
+    crossref = (await client.list_external_sources())[0]
+
+    assert crossref.entry_uri("10.1038/nature12373") == (
+        f"{API}/integration/externalsources/crossref/entryValues/10.1038/nature12373"
+    )
+
+
+@respx.mock
+async def test_a_provider_with_no_such_record_answers_400_and_means_404(client) -> None:
+    """LiveImportDataProvider raises "No record found", which Spring maps to 400."""
+    respx.get(f"{API}/integration/externalsources/arxiv/entryValues/2401.01234").mock(
+        return_value=httpx.Response(400, json={"message": "Request is invalid or incorrect"})
+    )
+
+    with pytest.raises(DSpaceNotFound):
+        await client.external_entry("arxiv", "2401.01234")
+
+
+@respx.mock
+async def test_creating_a_draft_from_an_entry_sends_a_uri_list(client) -> None:
+    entry_uri = f"{API}/integration/externalsources/crossref/entryValues/10.1038/nature12373"
+    route = respx.post(f"{API}/submission/workspaceitems").mock(
+        return_value=httpx.Response(201, json={"id": 55, "sections": {}, "errors": []})
+    )
+
+    item = await client.create_workspaceitem_from_entry("c1", entry_uri)
+
+    request = route.calls.last.request
+    assert item.id == "55"
+    assert request.headers["content-type"] == "text/uri-list"
+    assert request.content.decode() == entry_uri
+    assert "owningCollection=c1" in str(request.url)

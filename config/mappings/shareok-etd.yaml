@@ -14,3 +14,13 @@ committee_members: dc.contributor.committeeMember
 keywords:          dc.subject
 abstract:          dc.description.abstract
 date_issued:       dc.date.issued
+
+# Only ever filled by a registry record (DESIGN.md §13.1) -- a title page does
+# not carry them. The targets follow DSpace's own crossref provider mapping
+# (config/spring/api/crossref-integration.xml), so an item deposited through
+# ScholarDrop and one imported by DSpace's live-import land in the same fields.
+# A collection whose form has no such field shows the value under "not placed"
+# rather than dropping it.
+publisher:         dc.publisher
+journal:           dc.relation.ispartof
+doi:               dc.identifier.doi

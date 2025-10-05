@@ -109,6 +109,27 @@ class Settings(BaseSettings):
     dedup_title_threshold: float = 0.90
     dedup_max_matches: int = 5
 
+    # Identifier-first submission (DESIGN.md §13.1). Off switches the identifier
+    # box off entirely; a repository that would rather every deposit began with a
+    # file can have that.
+    identifiers_enabled: bool = True
+    # Prefer the repository's own live-import providers (crossref, arxiv,
+    # pubmed...) so the *server* maps the record with its own configuration.
+    # Falls back to registry_resolution_enabled when the instance has no provider
+    # for the identifier, or its provider fails.
+    identifiers_native_source_enabled: bool = True
+    # ScholarDrop asking the registries itself. Identifiers are not document
+    # content, so this is allowed even for a submission marked restricted -- but
+    # an instance that must make no outbound calls at all can switch it off.
+    registry_resolution_enabled: bool = True
+    # Crossref's polite pool wants a contact address; without one the calls still
+    # work, from the anonymous pool.
+    registry_mailto: str = ""
+    # Registries are quick when they are up, and this runs inside the extraction
+    # job the browser is already polling -- so short enough not to hold a
+    # submission, long enough to survive a slow first byte.
+    registry_timeout_seconds: float = 20.0
+
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 

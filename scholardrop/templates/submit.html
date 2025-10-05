@@ -1,17 +1,24 @@
 {% extends "base.html" %}
-{% block title %}Upload a PDF &middot; ScholarDrop{% endblock %}
+{% block title %}{{ 'Start a submission' if offer_identifier else 'Upload a PDF' }} &middot; ScholarDrop{% endblock %}
 
 {% block content %}
-<h1>Upload a PDF</h1>
+<h1>{{ 'Start a submission' if offer_identifier else 'Upload a PDF' }}</h1>
 
 <div class="notice">
   <p>Depositing to <strong>{{ collection_name or collection_uuid }}</strong>{% if collection_handle %} ({{ collection_handle }}){% endif %}.</p>
 </div>
 
 <p class="lede">
+  {% if offer_identifier %}
+  A PDF, an identifier, or both. ScholarDrop opens a draft submission in that
+  collection, takes the published record for anything you gave an identifier for,
+  and reads the PDF for the rest — title, authors, committee, keywords, abstract.
+  You review everything before anything is deposited.
+  {% else %}
   One PDF. ScholarDrop attaches it to a new draft submission in that collection and
   reads it for a title, authors, committee, keywords and an abstract — you review
   everything before anything is deposited.
+  {% endif %}
 </p>
 
 <div id="upload-panel">
