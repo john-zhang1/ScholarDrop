@@ -37,6 +37,11 @@ EXTRACTED_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+# Extracted fields whose values are people, and so are worth an ORCID lookup
+# (DESIGN.md §13.2). `authors` first: it is the primary author, which is what a
+# single-valued ORCID field on a form means by "the author".
+AUTHOR_LIKE_FIELDS: tuple[str, ...] = ("authors", "advisor", "committee_members")
+
 # schema.element or schema.element.qualifier
 _METADATA_FIELD_RE = re.compile(r"^[a-zA-Z][\w]*\.[a-zA-Z][\w]*(\.[a-zA-Z][\w]*)?$")
 
@@ -76,6 +81,40 @@ class Instance(BaseModel):
     # cloud (Claude), local (a model on this box, zero egress), or heuristic (no
     # model at all). `llm` is the pre-3b spelling of `cloud` and still parses.
     extraction: Literal["cloud", "local", "heuristic"] = "cloud"
+    # Where an ORCID iD picked on the review form is *stored* (DESIGN.md §13.2):
+    #
+    #   authority              the iD goes in the metadata value's `authority` key
+    #   field:<metadata.field> the iD goes in a parallel field on the same form
+    #   display_only           the iD is shown while editing and stored nowhere
+    #
+    # The default is display_only, and deliberately so: writing an authority key
+    # into a repository that is not expecting one is not a cosmetic mistake. On
+    # the instance this was written against, `dc.contributor.author` *is*
+    # authority-controlled -- by `SolrAuthorAuthority`, whose keys are authority-
+    # core uuids. 24,374 of its 25,009 author values carry one. An ORCID iD
+    # written into that key would be a dangling reference in an index the whole
+    # repository browses by.
+    orcid_mode: str = "display_only"
+
+    @field_validator("orcid_mode")
+    @classmethod
+    def _check_orcid_mode(cls, v: str) -> str:
+        if v in ("authority", "display_only"):
+            return v
+        target = v.removeprefix("field:") if v.startswith("field:") else ""
+        if not target or not _METADATA_FIELD_RE.match(target):
+            raise ValueError(
+                f"orcid_mode must be 'authority', 'display_only', or "
+                f"'field:<schema.element[.qualifier]>'; got {v!r}"
+            )
+        return v
+
+    @property
+    def orcid_target_field(self) -> str:
+        """The parallel metadata field an iD is written to, in `field:` mode."""
+        if not self.orcid_mode.startswith("field:"):
+            return ""
+        return self.orcid_mode.removeprefix("field:")
 
     @field_validator("extraction", mode="before")
     @classmethod
@@ -155,6 +194,18 @@ class MappingProfile(BaseModel):
 
     def metadata_field(self, extracted_field: str) -> str | None:
         return self.fields.get(extracted_field)
+
+    def author_fields(self) -> frozenset[str]:
+        """Metadata fields that hold a person's name, per this profile.
+
+        What ORCID's type-ahead is offered on. Read from the profile rather than
+        matched on `dc.contributor.*`, because which field holds a person is a
+        repository's decision -- an instance mapping `advisor` to something else
+        entirely still gets the lookup where it belongs, and nowhere else.
+        """
+        return frozenset(
+            field for name in AUTHOR_LIKE_FIELDS if (field := self.fields.get(name)) is not None
+        )
 
 
 class Registry(BaseModel):

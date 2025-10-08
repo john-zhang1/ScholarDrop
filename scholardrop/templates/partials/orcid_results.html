@@ -1,0 +1,42 @@
+{# ORCID suggestions for one author row (DESIGN.md §13.2).
+
+   Buttons, not links: choosing one changes this page's form and navigates
+   nowhere. Each sets its row's name box and the hidden iD beside it, then empties
+   this list -- three assignments in an `hx-on:click`, which is the same
+   no-JavaScript-file mechanism the remove-row button uses.
+
+   The list is a real list with a heading, so a screen reader reaching it is told
+   what it is and how many there are, rather than finding buttons loose in a form.
+   Each button's accessible name carries the institution and the iD, because
+   "Smith, John" three times over is not a choice anybody can make. #}
+{% if people %}
+<div class="orcid-results" role="group" aria-label="ORCID matches for {{ query }}">
+  <p class="quiet orcid-heading" id="orcid-heading-{{ field }}">
+    {{ people | length }} ORCID match{{ '' if people | length == 1 else 'es' }} — choose one, or carry on typing
+  </p>
+  <ul class="plain" aria-labelledby="orcid-heading-{{ field }}">
+    {% for person in people %}
+    <li>
+      {# The values ride in data- attributes rather than being interpolated into
+         the handler: ordinary HTML escaping then covers every name, and the
+         script is a fixed string. Interpolating `| tojson` looked tidier and
+         broke on the first name with a space -- its double quotes closed the
+         attribute, and the only symptom was a console "Unexpected token". #}
+      <button type="button" class="link-button orcid-choice"
+              data-name="{{ person.name }}" data-orcid="{{ person.orcid_id }}"
+              hx-on:click="const row = this.closest('.field-row');
+                row.querySelector('.value-input').value = this.dataset.name;
+                row.querySelector('.orcid-input').value = this.dataset.orcid;
+                row.querySelector('.orcid-chosen').textContent = this.dataset.orcid;
+                row.querySelector('.orcid-suggestions').innerHTML = '';">
+        <strong>{{ person.name }}</strong>
+        {% if person.affiliation %}<span class="quiet"> · {{ person.affiliation }}</span>{% endif %}
+        <span class="quiet"> · {{ person.orcid_id }}</span>
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% elif query and query | length >= 3 %}
+<p class="quiet orcid-none" role="status">No ORCID match for “{{ query }}”. Typing the name is fine.</p>
+{% endif %}

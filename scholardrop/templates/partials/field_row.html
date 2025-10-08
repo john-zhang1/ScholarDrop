@@ -17,6 +17,9 @@
    it must not repeat the id -- two elements with one id is how the added input
    ended up sharing (and losing) the label. #}
 {% set first = row_index is not none and row_index == 0 %}
+{# Rendered both inside the whole form (where `form` exists) and on its own by
+   /review/{id}/row (where only `wsi_id` does). #}
+{% set draft_id = wsi_id if wsi_id is defined and wsi_id else form.workspaceitem_id %}
 {% set row_label = label ~ (', value ' ~ (row_index + 1) if row_index else ', another value') %}
 <div class="field-row">
   {% if field.config.is_choice and field.options %}
@@ -40,13 +43,29 @@
             {% if field.config.mandatory %}aria-required="true"{% endif %}
             {% if field.has_error %}aria-invalid="true"{% endif %}>{{ value.value }}</textarea>
   {% else %}
-  <input type="text" {% if first %}id="{{ field.dom_id }}"{% else %}aria-label="{{ row_label }}"{% endif %}
+  <input type="text" class="value-input"
+         {% if first %}id="{{ field.dom_id }}"{% else %}aria-label="{{ row_label }}"{% endif %}
          name="{{ field.name }}"
          value="{{ value.value }}"
          {% if described %}aria-describedby="{{ described }}"{% endif %}
          {% if field.config.mandatory %}aria-required="true"{% endif %}
          {% if field.has_error %}aria-invalid="true"{% endif %}
-         {% if field.config.input_type == 'date' %}placeholder="YYYY-MM-DD"{% endif %}>
+         {% if field.config.input_type == 'date' %}placeholder="YYYY-MM-DD"{% endif %}
+         {% if field.orcid_lookup %}
+         autocomplete="off"
+         hx-get="/review/{{ draft_id }}/orcid?field={{ field.dom_id | urlencode }}&amp;name={{ field.name | urlencode }}"
+         hx-trigger="keyup changed delay:400ms"
+         {# `next`, not `closest ... find ...`: htmx's extended selectors are a
+            prefix, not a chain, and the suggestions div is the next matching
+            element after this input inside the row. #}
+         hx-target="next .orcid-suggestions"
+         hx-swap="innerHTML"
+         {# htmx sends the triggering input's own value under its own name, so
+            the endpoint is told that name up front and reads the query from it.
+            The obvious `hx-vals="js:{q: event.target.value}"` does *not* work:
+            htmx 2.0.4 evaluates hx-vals with no `event` in scope, and the only
+            symptom is a console error and a request that never happens. #}
+         {% endif %}>
   {% endif %}
 
   {# Text, not colour or a tooltip: `title` is not reliably announced, and the
@@ -57,6 +76,17 @@
   {# Where it came from, not how: a value the publisher's own record supplied
      deserves less re-checking than one read off a title page (DESIGN.md §13.1). #}
   <span class="badge">from the {{ value.provenance or 'PDF' }}</span>
+  {% endif %}
+
+  {# The chosen iD travels as a hidden input beside its value, in document order,
+     because that is how `patch.parse_rows` pairs them -- an empty row would break
+     any pairing done by index (DESIGN.md §13.2). It is rendered whether or not
+     this instance stores iDs: the form has to survive a validation error with the
+     choice intact either way. #}
+  {% if field.orcid_lookup %}
+  <input type="hidden" class="orcid-input" name="{{ field.orcid_name }}" value="{{ value.orcid }}">
+  <span class="badge orcid-chosen" aria-live="polite">{{ value.orcid }}</span>
+  <div class="orcid-suggestions"></div>
   {% endif %}
 
   {% if field.config.repeatable %}

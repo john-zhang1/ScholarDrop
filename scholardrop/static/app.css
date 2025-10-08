@@ -303,6 +303,17 @@ textarea { width: 100%; resize: vertical; }
   white-space: nowrap;
 }
 .badge-check { background: #f6e7c8; color: #6b4a06; }
+/* An empty ORCID badge must not leave a floating pill on every author row. */
+.orcid-chosen:empty { display: none; }
+
+/* ORCID suggestions (DESIGN.md §13.2). A plain list under the row: no overlay,
+   no absolute positioning, nothing that can cover the field being typed into or
+   escape a 320px viewport. */
+.orcid-suggestions { flex-basis: 100%; }
+.orcid-results { margin: 0.25rem 0 0; }
+.orcid-heading { margin: 0 0 0.15rem; font-size: 0.8rem; }
+.orcid-choice { text-align: left; font-size: 0.85rem; padding: 0.15rem 0; }
+.orcid-none { margin: 0.25rem 0 0; font-size: 0.8rem; }
 
 /* Draft readiness. Colour is a second signal, never the only one -- the badge
    says "Ready" or "Needs 3" in words, and the blockers are listed below it. */

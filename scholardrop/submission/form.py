@@ -30,6 +30,10 @@ from scholardrop.extract.models import TIER_LABELS, SourceTier
 # Section types we render as an editable metadata form. Everything else
 # (collection, upload, license, and any custom step) is shown, not edited.
 FORM_SECTION = "submission-form"
+# Appended to a field's input name for the hidden input holding its ORCID iD.
+# `::` already separates section from field, so a third segment cannot collide
+# with a metadata field name.
+ORCID_SUFFIX = "::orcid"
 UPLOAD_SECTION = "upload"
 LICENSE_SECTION = "license"
 COLLECTION_SECTION = "collection"
@@ -147,6 +151,9 @@ class FormValue:
     # Which tier pre-filled it (DESIGN.md §13.1). Empty for a stored value or one
     # the user typed -- those need no explanation.
     source: SourceTier | None = None
+    # An ORCID iD chosen for this value (DESIGN.md §13.2), carried through the
+    # form whether or not the instance stores it anywhere.
+    orcid: str = ""
 
     @property
     def provenance(self) -> str:
@@ -161,6 +168,9 @@ class FormField:
     values: list[FormValue] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     options: list[VocabularyEntry] = field(default_factory=list)
+    # True where this field holds a person and the instance offers the ORCID
+    # type-ahead for it (DESIGN.md §13.2).
+    orcid_lookup: bool = False
 
     @property
     def name(self) -> str:
@@ -208,6 +218,11 @@ class FormField:
         if self.has_error:
             ids.append(f"error-{self.dom_id}")
         return " ".join(ids)
+
+    @property
+    def orcid_name(self) -> str:
+        """The hidden input carrying this row's iD, parsed by `patch.parse_rows`."""
+        return f"{self.name}{ORCID_SUFFIX}"
 
     def rows(self) -> list[FormValue]:
         """Always at least one row, so an empty field is still editable."""
@@ -367,19 +382,24 @@ def _guess_type(section_id: str) -> str:
     return FORM_SECTION
 
 
-def _values_of(section_data: Any, metadata_field: str) -> list[str]:
-    """Stored values of one metadata field: [{"value": ...}, ...] -> [str]."""
+def _values_of(section_data: Any, metadata_field: str) -> list[tuple[str, str]]:
+    """Stored values of one metadata field, each with its authority key.
+
+    `[{"value": ..., "authority": ...}, ...]` -> `[(value, authority)]`. The
+    authority is carried so a draft resumed on an ORCID-authority instance shows
+    the iD it already holds instead of looking as though nobody chose one.
+    """
     if not isinstance(section_data, dict):
         return []
     entries = section_data.get(metadata_field) or []
     if not isinstance(entries, list):
         return []
-    out = []
+    out: list[tuple[str, str]] = []
     for entry in entries:
         if isinstance(entry, dict) and entry.get("value"):
-            out.append(str(entry["value"]))
+            out.append((str(entry["value"]), str(entry.get("authority") or "")))
         elif isinstance(entry, str) and entry:
-            out.append(entry)
+            out.append((entry, ""))
     return out
 
 
@@ -399,7 +419,9 @@ def build_form(
     mapped: MappedMetadata | None = None,
     vocabularies: dict[str, list[VocabularyEntry]] | None = None,
     submitted: dict[tuple[str, str], list[str]] | None = None,
+    submitted_orcids: dict[tuple[str, str], list[str]] | None = None,
     extra_errors: dict[str, list[str]] | None = None,
+    orcid_policy: Any = None,
 ) -> SubmissionForm:
     """Assemble the review form.
 
@@ -431,7 +453,10 @@ def build_form(
         if section_type == FORM_SECTION:
             data = item.sections.get(section_id)
             for config in parse_fields(form_configs.get(section_id) or {}):
-                values = [FormValue(value=v) for v in _values_of(data, config.metadata_field)]
+                values = [
+                    FormValue(value=value, orcid=authority)
+                    for value, authority in _values_of(data, config.metadata_field)
+                ]
                 section.fields.append(
                     FormField(
                         config=config,
@@ -439,6 +464,9 @@ def build_form(
                         values=values,
                         errors=errors.get(f"{section_id}/{config.metadata_field}", []),
                         options=vocabularies.get(config.vocabulary or "", []),
+                        orcid_lookup=bool(
+                            orcid_policy and orcid_policy.offers_lookup(config.metadata_field)
+                        ),
                     )
                 )
         form.sections.append(section)
@@ -446,24 +474,36 @@ def build_form(
     if mapped is not None:
         _apply_prefill(form, mapped)
     if submitted is not None:
-        _apply_submitted(form, submitted)
+        _apply_submitted(form, submitted, submitted_orcids or {})
     if extra_errors:
         _apply_errors(form, extra_errors)
     return form
 
 
-def _apply_submitted(form: SubmissionForm, submitted: dict[tuple[str, str], list[str]]) -> None:
+def _apply_submitted(
+    form: SubmissionForm,
+    submitted: dict[tuple[str, str], list[str]],
+    orcids: dict[tuple[str, str], list[str]] | None = None,
+) -> None:
     """Re-render with what the user just typed, not with what DSpace stores.
 
     Used when the form comes back -- the confirm step, a validation failure, or
-    "back to editing" -- so an edit is never silently lost between requests.
+    "back to editing" -- so an edit is never silently lost between requests. The
+    chosen iDs travel with their values, or picking one and then hitting a
+    validation error would quietly discard it.
     """
+    orcids = orcids or {}
     for section in form.editable_sections:
         for field_ in section.fields:
-            values = submitted.get((section.id, field_.config.metadata_field))
+            key = (section.id, field_.config.metadata_field)
+            values = submitted.get(key)
             if values is None:
                 continue
-            field_.values = [FormValue(value=v) for v in values]
+            chosen = orcids.get(key) or []
+            field_.values = [
+                FormValue(value=v, orcid=chosen[i] if i < len(chosen) else "")
+                for i, v in enumerate(values)
+            ]
 
 
 def _apply_errors(form: SubmissionForm, errors: dict[str, list[str]]) -> None:

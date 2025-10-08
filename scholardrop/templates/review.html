@@ -65,6 +65,28 @@
 </div>
 {% endif %}
 
+{% if orcid_policy and orcid_policy.author_fields %}
+<div class="notice" role="status">
+  <p>
+    {% if orcid_policy.stores_authority %}
+    <strong>Author names can be matched to ORCID.</strong> Start typing a name and pick a
+    match; the iD is deposited with the name as its authority record.
+    {% elif orcid_policy.stores_field %}
+    <strong>Author names can be matched to ORCID.</strong> Start typing a name and pick a
+    match; the iD is deposited in <code>{{ orcid_policy.target[1] }}</code>{% if not orcid_policy.target_repeatable %},
+    which holds one iD — the first author's{% endif %}.
+    {% elif orcid_policy.unavailable_target %}
+    <strong>Author names can be matched to ORCID</strong>, but this collection's form has no
+    <code>{{ orcid_policy.unavailable_target }}</code> field, so a chosen iD is shown here and
+    <strong>not deposited</strong>. Put it in a field yourself if this collection has one.
+    {% else %}
+    <strong>Author names can be matched to ORCID</strong> to check you have the right person.
+    This repository does not store the iD, so it is for your eyes while you work.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
 {% if form.missing_required %}
 <div class="notice notice-missing" role="status">
   <p>

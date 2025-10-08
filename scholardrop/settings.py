@@ -130,6 +130,18 @@ class Settings(BaseSettings):
     # submission, long enough to survive a slow first byte.
     registry_timeout_seconds: float = 20.0
 
+    # ORCID author lookup (DESIGN.md §13.2). Assistance on the review form, never
+    # a gate: manual entry always works, and an unreachable ORCID is silent.
+    orcid_enabled: bool = True
+    orcid_api_url: str = "https://pub.orcid.org/v3.0"
+    # Short. This runs while somebody is typing a name, and a slow answer to a
+    # query they have already moved on from is worth nothing.
+    orcid_timeout_seconds: float = 8.0
+    orcid_max_results: int = 5
+    # Below this many characters the type-ahead does not ask. "Sm" matches tens of
+    # thousands of people and tells the person typing nothing.
+    orcid_min_query_length: int = 3
+
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 

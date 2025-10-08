@@ -66,6 +66,12 @@
       {% if field.filled %}
         {% for value in field.values if value.value %}
       <input type="hidden" name="{{ field.name }}" value="{{ value.value }}">
+        {# Immediately after its value, because that adjacency is what pairs the
+           two in `patch.parse_rows` -- a chosen iD dropped here would be lost
+           between the summary and the deposit, silently. #}
+        {% if field.orcid_lookup %}
+      <input type="hidden" name="{{ field.orcid_name }}" value="{{ value.orcid }}">
+        {% endif %}
         {% endfor %}
       {% else %}
       <input type="hidden" name="{{ field.name }}" value="">

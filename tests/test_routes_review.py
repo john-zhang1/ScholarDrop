@@ -220,3 +220,90 @@ def test_a_discarded_draft_is_a_page_not_a_crash(with_collection, fake_dspace) -
     assert response.status_code == 404
     assert "no longer in the repository" in response.text
     assert "/drafts" in response.text
+
+
+# ---- ORCID type-ahead (phase 9, DESIGN.md §13.2) --------------------------
+
+
+def test_the_author_field_offers_the_lookup_and_the_title_does_not(
+    with_collection, fake_dspace, pdf_bytes
+) -> None:
+    upload(with_collection, pdf_bytes)
+
+    page = with_collection.get("/review/42").text
+    author = page.split('name="traditionalpageone::dc.contributor.author"')[1][:600]
+    title = page.split('name="traditionalpageone::dc.title"')[1][:600]
+
+    assert "/orcid?field=" in author
+    assert "/orcid?field=" not in title
+
+
+def test_the_lookup_endpoint_renders_matches(with_collection, monkeypatch) -> None:
+    from scholardrop import orcid
+
+    async def fake_search(typed, settings, **kwargs):
+        return [
+            orcid.OrcidPerson(
+                orcid_id="0000-0002-1825-0097",
+                given="Josiah",
+                family="Carberry",
+                institutions=("Brown University",),
+            )
+        ]
+
+    monkeypatch.setattr(orcid, "search", fake_search)
+    response = with_collection.get("/review/42/orcid", params={"q": "Carberry, Josiah"})
+
+    assert response.status_code == 200
+    assert "Carberry, Josiah" in response.text
+    assert "0000-0002-1825-0097" in response.text
+    assert "Brown University" in response.text
+
+
+def test_no_match_says_so_rather_than_nothing(with_collection, monkeypatch) -> None:
+    from scholardrop import orcid
+
+    async def none(typed, settings, **kwargs):
+        return []
+
+    monkeypatch.setattr(orcid, "search", none)
+    response = with_collection.get("/review/42/orcid", params={"q": "Zzzzzz"})
+
+    assert response.status_code == 200
+    assert "No ORCID match" in response.text
+
+
+def test_the_lookup_endpoint_needs_a_session(web) -> None:
+    response = web.get("/review/42/orcid", params={"q": "Carberry"})
+
+    assert response.status_code in (303, 401, 403)
+
+
+def test_the_lookup_costs_the_repository_nothing(with_collection, fake_dspace, monkeypatch) -> None:
+    """A keystroke must not become a workspaceitem read."""
+    from scholardrop import orcid
+
+    async def none(typed, settings, **kwargs):
+        return []
+
+    monkeypatch.setattr(orcid, "search", none)
+    fake_dspace.calls.clear()
+    with_collection.get("/review/42/orcid", params={"q": "Carberry"})
+
+    assert fake_dspace.calls == []
+
+
+def test_a_chosen_id_survives_a_rejected_deposit(with_collection, fake_dspace, pdf_bytes) -> None:
+    """Picking a match and then hitting a validation error must not lose it."""
+    upload(with_collection, pdf_bytes)
+    response = with_collection.post(
+        "/review/42/deposit",
+        data={
+            "traditionalpageone::dc.contributor.author": "Carberry, Josiah",
+            "traditionalpageone::dc.contributor.author::orcid": "0000-0002-1825-0097",
+            "traditionalpageone::dc.title": "A Thesis",
+        },
+    )
+
+    assert response.status_code == 400  # the licence was not granted
+    assert 'value="0000-0002-1825-0097"' in response.text

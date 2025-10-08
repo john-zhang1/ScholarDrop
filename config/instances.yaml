@@ -33,6 +33,13 @@ instances:
     base_url: http://127.0.0.1:8080/server
     mapping_profile: shareok-etd
     contact_email: shareok@ou.edu
+    # DESIGN.md §13.2, decided at the Phase 9 gate against this instance's own
+    # configuration. NOT `authority`: dc.contributor.author here is controlled by
+    # SolrAuthorAuthority, whose keys are authority-core uuids (24,374 of 25,009
+    # author values carry one), so an ORCID iD in that key would be a dangling
+    # reference. shareok.orcid is where this repository actually keeps iDs (1,739
+    # values) and it is on the outhesispage1 / oudissertationpage1 forms.
+    orcid_mode: field:shareok.orcid
     # Only on this VM do the UI and the API live on different ports; everywhere
     # else the default (base_url without /server) is right. Used to link to an
     # item a duplicate warning names (DESIGN.md §12).

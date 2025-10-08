@@ -25,6 +25,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
+from scholardrop import orcid as orcid_lookup
 from scholardrop.dedup.check import title_matches
 from scholardrop.dedup.matches import matches_from_section, section_is_configured
 from scholardrop.dspace import DSpaceError, DSpaceValidationError
@@ -53,6 +54,7 @@ from scholardrop.submission.patch import (
     build_operations,
     field_index,
     license_granted,
+    parse_orcids,
     parse_submission,
 )
 
@@ -84,6 +86,16 @@ async def _load(client: Any, wsi_id: str, *, cache: Any, instance_key: str) -> _
     return _Configuration(item, sections, configs, vocabularies)
 
 
+def _orcid_policy(request: Request, instance: Any, live: _Configuration) -> Any:
+    """This instance's ORCID storage mode, read against this collection's form."""
+    return orcid_lookup.policy_for(
+        instance,
+        request.app.state.registry.profile_for(instance),
+        live.allowed,
+        enabled=request.app.state.settings.orcid_enabled,
+    )
+
+
 @router.get("/review/{wsi_id}", response_class=HTMLResponse)
 async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
     session = require_session(request)
@@ -98,12 +110,14 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
     async with dspace_client(request, session) as client:
         live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
+        policy = _orcid_policy(request, instance, live)
         form = build_form(
             live.item,
             live.configs,
             sections=live.sections,
             mapped=mapped,
             vocabularies=live.vocabularies,
+            orcid_policy=policy,
         )
         # Inside the block: the duplicate check may need a Discovery query, and
         # building a second client for it would mean a second CSRF/JWT round trip
@@ -131,6 +145,7 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
         identifier_url=draft.get("identifier_url"),
         identifier_source=draft.get("identifier_source"),
         registry_notice=job.registry_notice if job else None,
+        orcid_policy=policy,
     )
 
 
@@ -146,6 +161,7 @@ async def edit(request: Request, wsi_id: DraftId) -> HTMLResponse:
         live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
 
+    policy = _orcid_policy(request, instance, live)
     submitted = parse_submission(posted, live.allowed)
     form = build_form(
         live.item,
@@ -153,6 +169,8 @@ async def edit(request: Request, wsi_id: DraftId) -> HTMLResponse:
         sections=live.sections,
         vocabularies=live.vocabularies,
         submitted=submitted,
+        submitted_orcids=parse_orcids(posted, live.allowed),
+        orcid_policy=policy,
     )
     return render(
         request,
@@ -161,6 +179,7 @@ async def edit(request: Request, wsi_id: DraftId) -> HTMLResponse:
         licence=licence,
         filename=session.submission(wsi_id).get("filename"),
         license_checked=license_granted(posted),
+        orcid_policy=policy,
     )
 
 
@@ -183,6 +202,7 @@ async def confirm(request: Request, wsi_id: DraftId) -> HTMLResponse:
             client, live.item, cache=cache, instance_key=instance.key
         )
 
+    policy = _orcid_policy(request, instance, live)
     submitted = parse_submission(posted, live.allowed)
     form = build_form(
         live.item,
@@ -190,10 +210,13 @@ async def confirm(request: Request, wsi_id: DraftId) -> HTMLResponse:
         sections=live.sections,
         vocabularies=live.vocabularies,
         submitted=submitted,
+        submitted_orcids=parse_orcids(posted, live.allowed),
+        orcid_policy=policy,
     )
     return render(
         request,
         "confirm.html",
+        orcid_policy=policy,
         form=form,
         licence=licence,
         license_checked=license_granted(posted),
@@ -217,7 +240,9 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         collection = await _collection_name(
             client, live.item, cache=cache, instance_key=instance.key
         )
+        policy = _orcid_policy(request, instance, live)
         submitted = parse_submission(posted, live.allowed)
+        orcids = parse_orcids(posted, live.allowed)
 
         def back(message: str, errors: dict[str, list[str]], status: int) -> HTMLResponse:
             form = build_form(
@@ -226,7 +251,9 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
                 sections=live.sections,
                 vocabularies=live.vocabularies,
                 submitted=submitted,
+                submitted_orcids=orcids,
                 extra_errors=errors,
+                orcid_policy=policy,
             )
             response = render(
                 request,
@@ -236,6 +263,7 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
                 filename=session.submission(wsi_id).get("filename"),
                 license_checked=granted,
                 deposit_error=message,
+                orcid_policy=policy,
             )
             response.status_code = status
             return response
@@ -247,7 +275,9 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
                 400,
             )
 
-        operations = build_operations(live.item, submitted, grant_license=True)
+        operations = build_operations(
+            live.item, submitted, grant_license=True, orcids=orcids, policy=policy
+        )
         try:
             patched = await client.patch_sections(wsi_id, operations)
         except DSpaceValidationError as exc:
@@ -327,6 +357,39 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
     )
 
 
+@router.get("/review/{wsi_id}/orcid", response_class=HTMLResponse)
+async def orcid_suggestions(
+    request: Request,
+    wsi_id: DraftId,
+    field: str = Query(""),
+    name: str = Query(""),
+    q: str = Query(""),
+) -> HTMLResponse:
+    """Type-ahead against ORCID's public API (DESIGN.md §13.2).
+
+    Requires a session but asks DSpace nothing: this is a public registry, and
+    spending a workspaceitem read on every keystroke to prove the draft exists
+    would cost the repository far more than it protects. `orcid.search` never
+    raises, so the worst answer is an empty list -- which renders as nothing at
+    all, exactly as it should while somebody is still typing.
+    """
+    require_session(request)
+    settings = request.app.state.settings
+    # htmx sends the input's value under the input's own *name*
+    # (`section::metadata.field`), which is why the row tells us that name; `q`
+    # is the plain form, for anything driving this endpoint directly.
+    typed = q or (request.query_params.get(name, "") if name else "")
+    people = await orcid_lookup.search(typed, settings)
+    return render(
+        request,
+        "partials/orcid_results.html",
+        people=people,
+        field=field,
+        query=typed,
+        wsi_id=wsi_id,
+    )
+
+
 @router.get("/review/{wsi_id}/row", response_class=HTMLResponse)
 async def add_row(
     request: Request,
@@ -364,11 +427,18 @@ async def add_row(
         log.info("ignored add-row for %s/%s on workspaceitem %s", section, field, wsi_id)
         return HTMLResponse("")
 
+    profile = request.app.state.registry.profile_for(instance)
+    policy = orcid_lookup.policy_for(
+        instance, profile, enabled=request.app.state.settings.orcid_enabled
+    )
     form_field = FormField(
         config=match,
         section_id=section,
         values=[FormValue()],
         options=vocabularies.get(match.vocabulary or "", []),
+        # An appended author row offers the lookup too, or the second author is
+        # the only one who has to type an iD by hand.
+        orcid_lookup=policy.offers_lookup(match.metadata_field),
     )
     # row_index=None: this row is appended, so it is never the first one and must
     # not repeat the id the field's <label for> points at.
@@ -378,6 +448,7 @@ async def add_row(
         field=form_field,
         value=FormValue(),
         row_index=None,
+        wsi_id=wsi_id,
     )
 
 
