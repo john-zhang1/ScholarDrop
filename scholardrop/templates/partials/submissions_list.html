@@ -1,0 +1,82 @@
+{# The merged list: what this app deposited, plus what DSpace still holds as a
+   draft. Read-only except for the draft actions, which are the same partial the
+   drafts list uses (DESIGN.md §13.3).
+
+   Each row states its own state in words as well as in colour: "In review" is a
+   badge a sighted reader takes from position and hue, and the same sentence has
+   to be there for a reader who gets neither. #}
+{% if submissions %}
+<p class="quiet count">
+  {{ submissions | length }} submission{{ '' if submissions | length == 1 else 's' }}{% if live %} · {{ live }} live{% endif %}{% if in_review %} · {{ in_review }} in review{% endif %}{% if draft_count %} · {{ draft_count }} in progress{% endif %}
+</p>
+<ul class="collection-list">
+  {% for item in submissions %}
+  {# A draft row is identified as `draft-{id}`, not `submission-…`, because the
+     actions below are the drafts list's own partial and its hx-target is that
+     id. Rendering a different one leaves the Discard button pointing at nothing
+     — the click makes no request at all, which no route test can see. #}
+  <li class="collection submission state-{{ item.state.value }}"
+      id="{% if item.is_draft and item.wsi_id %}draft-{{ item.wsi_id }}{% else %}submission-{{ item.item_uuid or item.wsi_id }}{% endif %}">
+    <div>
+      {% if item.handle_url %}
+      <a class="collection-name" href="{{ item.handle_url }}">{{ item.title or 'Untitled submission' }}</a>
+      {% elif item.is_draft and item.wsi_id %}
+      <a class="collection-name" href="/review/{{ item.wsi_id }}"
+         {% if not item.title %}aria-label="Untitled draft (draft {{ item.wsi_id }})"{% endif %}>{{ item.title or 'Untitled draft' }}</a>
+      {% else %}
+      <span class="collection-name">{{ item.title or 'Untitled submission' }}</span>
+      {% endif %}
+      <span class="badge badge-{{ item.state.value }}">{{ item.label }}</span>
+      <div class="quiet">
+        {% if item.collection_name %}{{ item.collection_name }} · {% endif %}
+        {% if item.is_draft %}last changed{% else %}submitted{% endif %}
+        {% if item.when %}<time datetime="{{ item.when_iso }}">{{ item.when }}</time>{% else %}at an unrecorded time{% endif %}
+        {% if item.state.value == 'in_review' and item.workflow_id %} · workflow reference {{ item.workflow_id }}{% endif %}
+      </div>
+      {% if item.state.value == 'live' and item.handle_url %}
+      <div class="quiet">Permanent link: <a href="{{ item.handle_url }}">hdl.handle.net/{{ item.handle }}</a></div>
+      {% elif item.state.value == 'in_review' %}
+      <div class="quiet">With the collection's reviewers. It appears in the repository once they approve it; if they send it back, it returns to your drafts.</div>
+      {% elif item.state.value == 'withdrawn' %}
+      <div class="quiet">In the repository but withdrawn from public view. The collection's administrators can say why.</div>
+      {% elif item.detail %}
+      <div class="quiet">{{ item.detail }}</div>
+      {% endif %}
+      {% if item.is_draft and item.readiness and item.readiness.blockers %}
+      <ul class="blockers">
+        {% for blocker in item.readiness.shown %}
+        <li>{{ blocker.text }}</li>
+        {% endfor %}
+        {% if item.readiness.hidden %}
+        <li class="quiet">and {{ item.readiness.hidden }} more — open the draft to see {% if item.readiness.hidden == 1 %}it{% else %}them{% endif %}.</li>
+        {% endif %}
+      </ul>
+      {% endif %}
+    </div>
+    {% if item.is_draft and item.wsi_id %}
+    <div class="draft-actions">
+      {% with draft = item.as_draft() %}
+      {% include "partials/draft_actions.html" %}
+      {% endwith %}
+    </div>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% if truncated %}
+<p class="quiet">Showing the most recent {{ submissions | length }}. Older submissions are in the repository itself.</p>
+{% endif %}
+{% if not history_available %}
+<p class="quiet">Deposits made through ScholarDrop are not being recorded just now, so this
+list may show only what is still in progress.</p>
+{% endif %}
+{% else %}
+<p class="quiet">
+  {% if history_available %}
+  Nothing yet. <a href="/browse">Start a submission</a>.
+  {% else %}
+  Nothing in progress, and the record of past deposits could not be read.
+  <a href="/browse">Start a submission</a>.
+  {% endif %}
+</p>
+{% endif %}

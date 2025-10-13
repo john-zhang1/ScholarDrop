@@ -142,6 +142,23 @@ class Settings(BaseSettings):
     # thousands of people and tells the person typing nothing.
     orcid_min_query_length: int = 3
 
+    # The submission status page (DESIGN.md §13.3). Off means no deposit is
+    # logged and /my-submissions lists only what DSpace itself knows -- the
+    # drafts. Worth having: the log is the one piece of state this app keeps
+    # about a user beyond their session.
+    submissions_log_enabled: bool = True
+    submissions_log_path: Path = _REPO_ROOT / "var" / "submissions.sqlite"
+    # How many rows the status page shows. Not pagination: the page merges two
+    # sources with independent orderings, which cannot be paged consistently
+    # without merging the whole of both anyway, and one person's own submission
+    # history is small. Each logged row costs a live lookup, so this is also the
+    # bound on how many requests the page makes.
+    submissions_max_rows: int = 25
+    # Live lookups run concurrently against one httpx client. Enough to keep the
+    # page quick, low enough not to be a small load test aimed at the repository
+    # every time somebody opens it.
+    submissions_lookup_concurrency: int = 6
+
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 

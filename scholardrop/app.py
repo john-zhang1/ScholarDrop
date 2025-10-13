@@ -25,7 +25,7 @@ from scholardrop.extract import llm
 from scholardrop.extract.backends import local_is_configured
 from scholardrop.ratelimit import RateLimiter
 from scholardrop.request_log import RequestContextMiddleware, configure_logging
-from scholardrop.routes import auth, browse, drafts, home, review, submit
+from scholardrop.routes import auth, browse, drafts, home, review, submissions, submit
 from scholardrop.routes.deps import InstanceNotFound, NeedsLogin, is_htmx, page_context
 from scholardrop.security import SameOriginMiddleware, SecurityHeadersMiddleware
 from scholardrop.session import (
@@ -106,6 +106,7 @@ def create_app(
     app.include_router(submit.router)
     app.include_router(review.router)
     app.include_router(drafts.router)
+    app.include_router(submissions.router)
     _install_error_handlers(app)
 
     log.info(

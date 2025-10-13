@@ -30,7 +30,7 @@ from scholardrop.dspace import (
     VocabularyEntry,
     WorkflowItem,
 )
-from scholardrop.dspace.models import AuthStatus, Item, WorkspaceItem
+from scholardrop.dspace.models import AuthStatus, Item, ItemStatus, WorkspaceItem
 from scholardrop.extract.mapper import map_metadata
 from scholardrop.extract.models import ExtractedMetadata, SourceTier
 from scholardrop.submission.jobs import ExtractionResult
@@ -230,9 +230,14 @@ def workspaceitem_payload(
                 ],
             }
         ],
+        # Every workspaceitem link is a *sub-resource* of the workspaceitem --
+        # `item` is `/submission/workspaceitems/{id}/item`, not `/core/items/{uuid}`
+        # (checked against 9.2, 2026-07-30). A fixture that pointed at /core/items
+        # made it look as though the item uuid could be read off the link; it
+        # cannot, and the link has to be followed.
         "_links": {
             "self": {"href": f"{API}/submission/workspaceitems/{wsi_id}"},
-            "item": {"href": f"{API}/core/items/item-{wsi_id}"},
+            "item": {"href": f"{API}/submission/workspaceitems/{wsi_id}/item"},
         },
         "_embedded": {"submissionDefinition": LEAN_DEFINITION},
     }
@@ -363,6 +368,13 @@ class FakeDSpaceClient:
         self.search_results: list[Item] = []
         self.items_by_uuid: dict[str, Any] = {}
         self.missing_items: set[str] = set()
+
+        # Submission status (phase 10). A uuid with no scripted status answers
+        # "archived", which is what most deposits on this VM actually become.
+        self.item_statuses: dict[str, ItemStatus] = {}
+        self.default_item_status = ItemStatus(
+            uuid="item-1", found=True, in_archive=True, handle="11244/9999"
+        )
 
         # Recorded interactions
         self.calls: list[tuple[str, tuple, dict]] = []
@@ -577,6 +589,16 @@ class FakeDSpaceClient:
         if uuid_or_href in self.missing_items:
             raise DSpaceNotFound("gone", path=f"/core/items/{uuid_or_href}")
         return self.items_by_uuid.get(uuid_or_href) or self.archived_item
+
+    # -- submission status (phase 10) --------------------------------------
+
+    async def item_status(self, item_uuid: str) -> ItemStatus:
+        self._record("item_status", item_uuid)
+        if item_uuid in self.missing_items:
+            return ItemStatus.gone(item_uuid)
+        return self.item_statuses.get(item_uuid) or self.default_item_status.model_copy(
+            update={"uuid": item_uuid}
+        )
 
     # -- duplicate detection (phase 4c) -----------------------------------
 

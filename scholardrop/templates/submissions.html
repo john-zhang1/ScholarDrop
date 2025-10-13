@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Your submissions &middot; ScholarDrop{% endblock %}
+
+{% block content %}
+<h1>Your submissions</h1>
+<p class="lede">
+  Everything {{ signed_in_as or 'you' }} {% if instance %}sent to {{ instance.name }}{% else %}submitted{% endif %}
+  through ScholarDrop, and everything still in progress — with where each one has
+  got to now.
+</p>
+
+<div id="submissions-list" hx-get="/my-submissions/list" hx-trigger="load" hx-swap="innerHTML">
+  <p class="quiet">Loading…</p>
+</div>
+
+<p><a class="quiet" href="/browse">Start a new submission</a></p>
+{% endblock %}

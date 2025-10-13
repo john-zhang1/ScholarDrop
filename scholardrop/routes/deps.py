@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated, Any
@@ -12,6 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from scholardrop.config import Instance
 from scholardrop.dspace import DSpaceClient, DSpaceNotFound
+from scholardrop.history.log import Deposit, LogUnavailable, SubmissionLog, open_log
 from scholardrop.session import Session
 
 
@@ -138,6 +140,69 @@ def release_draft(request: Request, session: Session, wsi_id: str) -> None:
     if stored:
         Path(stored).unlink(missing_ok=True)
     request.app.state.sessions.save(session)
+
+
+def open_history(request: Request) -> SubmissionLog:
+    """The deposit log, or `LogUnavailable`.
+
+    Opened per use rather than held on `app.state`: a SQLite connection is not
+    safe to share across concurrent handlers, and opening a local file is
+    cheaper than the machinery that would make sharing one safe.
+    """
+    settings = request.app.state.settings
+    if not settings.submissions_log_enabled:
+        raise LogUnavailable("the submissions log is switched off")
+    return open_log(settings.submissions_log_path)
+
+
+def record_deposit(
+    request: Request,
+    session: Session,
+    instance: Instance,
+    *,
+    wsi_id: str,
+    item: Any,
+    archived_item: Any,
+    result: Any,
+    collection_name: str = "",
+    collection_uuid: str = "",
+    title: str = "",
+) -> None:
+    """Log one deposit. Never raises.
+
+    Called after the repository has accepted the submission, which is what makes
+    every failure here a log line: there is no outcome in which "we could not
+    write our own notes" should change what the user is told about a deposit
+    that succeeded.
+
+    The handle is written when there is one. An item that entered review has
+    none yet -- it is minted at approval -- so that row is completed later by the
+    status page reading it live, not by this write.
+    """
+    log = logging.getLogger("scholardrop.history")
+    try:
+        with open_history(request) as history:
+            history.record(
+                Deposit(
+                    base_url=instance.base_url,
+                    instance_key=instance.key,
+                    eperson_uuid=session.eperson_uuid or "",
+                    wsi_id=str(wsi_id),
+                    item_uuid=getattr(item, "uuid", "") or "",
+                    handle=getattr(archived_item, "handle", "") or "",
+                    collection_uuid=collection_uuid,
+                    collection_name=collection_name,
+                    title=title,
+                    entered_workflow=bool(getattr(result, "entered_workflow", False)),
+                    workflow_id=getattr(getattr(result, "workflow_item", None), "id", "") or "",
+                )
+            )
+    except LogUnavailable as exc:
+        log.info("deposit of draft %s not logged: %s", wsi_id, exc)
+    except Exception as exc:  # a bookkeeping bug must not report a deposit as failed
+        log.warning(
+            "deposit of draft %s could not be logged (%s: %s)", wsi_id, type(exc).__name__, exc
+        )
 
 
 def page_context(request: Request, **extra: Any) -> dict[str, Any]:

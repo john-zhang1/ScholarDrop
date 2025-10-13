@@ -49,6 +49,7 @@ from scholardrop.dspace.models import (
     ExternalSource,
     ExternalSourceEntry,
     Item,
+    ItemStatus,
     Page,
     VocabularyEntry,
     WorkflowItem,
@@ -449,6 +450,85 @@ class DSpaceClient:
     async def workflowitem(self, wfi_id: str | int) -> WorkflowItem:
         payload = await self._json("GET", f"/workflow/workflowitems/{wfi_id}")
         return WorkflowItem.from_payload(payload)
+
+    async def workflowitem_for_item(self, item_uuid: str) -> WorkflowItem | None:
+        """The workflowitem holding this item, or None if it is not in review.
+
+        **This is the search a submitter is allowed to run.** The obvious
+        endpoint, `workflowitems/search/findBySubmitter`, is annotated
+        `@PreAuthorize("hasAuthority('ADMIN')")` -- it answers 200 for a
+        repository administrator and 403 for everybody else, so a page built on
+        it works for whoever developed it and for nobody who uses it.
+        `search/item` authorizes on READ of the item instead, which the submitter
+        of that item has.
+
+        **Nothing found is 204, not 404** (the repository method returns null),
+        so this cannot go through `_json`: an empty body is the answer, not a
+        malformed one.
+
+        A uuid no item has answers **500**, not 404 -- `itemService.find` returns
+        null and `findByItem` is handed it -- so only ask about an item that has
+        just resolved.
+        """
+        response = await self._request(
+            "GET",
+            "/workflow/workflowitems/search/item",
+            params={"uuid": item_uuid},
+            expected=(200, 204),
+            resource=f"item {item_uuid}",
+        )
+        if response.status_code == 204 or not response.content.strip():
+            return None
+        return WorkflowItem.from_payload(_decode_json(response))
+
+    async def item_status(self, item_uuid: str) -> ItemStatus:
+        """Where a deposited item has got to: archived, in review, or back as a draft.
+
+        One read in the common case. `/core/items/{uuid}` carries `inArchive` and
+        the handle, and an archived item needs nothing further -- the workflow
+        search only runs for an item that is *not* archived, which is the
+        minority and the only case where the answer is ambiguous.
+
+        A missing item is `found=False` rather than an exception: a submission
+        removed from the repository is a row on a status page, not an error page.
+        Anything else that goes wrong is left to the caller, which decides
+        per row whether one unreadable submission takes the list down (it must
+        not).
+        """
+        if not item_uuid:
+            return ItemStatus.unchecked()
+        try:
+            payload = await self._json("GET", f"/core/items/{item_uuid}")
+        except DSpaceNotFound:
+            return ItemStatus.gone(item_uuid)
+        status = ItemStatus.from_item(payload)
+        if status.in_archive or status.withdrawn:
+            return status
+        workflow = await self.workflowitem_for_item(item_uuid)
+        if workflow is not None:
+            return status.model_copy(update={"in_workflow": True, "workflow_id": workflow.id})
+        # Neither archived nor in review: the submission has come back to its
+        # submitter. Finding which draft it is now is what makes the row
+        # resumable -- the id in the log names a workspaceitem the deposit
+        # consumed, and a rejection mints a new one.
+        draft = await self.workspaceitem_for_item(item_uuid)
+        if draft is None:
+            return status
+        return status.model_copy(update={"workspaceitem_id": draft.id})
+
+    async def workspaceitem_for_item(self, item_uuid: str) -> WorkspaceItem | None:
+        """The draft holding this item, or None. Same 204-means-nothing shape as
+        `workflowitem_for_item`, and authorized the same way (READ on the item)."""
+        response = await self._request(
+            "GET",
+            "/submission/workspaceitems/search/item",
+            params={"uuid": item_uuid},
+            expected=(200, 204),
+            resource=f"item {item_uuid}",
+        )
+        if response.status_code == 204 or not response.content.strip():
+            return None
+        return WorkspaceItem.from_payload(_decode_json(response))
 
     # ---- discovery and files (DESIGN.md §12) -------------------------------
 

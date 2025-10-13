@@ -321,6 +321,15 @@ textarea { width: 100%; resize: vertical; }
 .badge-needs { background: #f6e7c8; color: #6b4a06; }
 .badge-problem { background: #f7dcdc; color: #7c1d1d; }
 
+/* Submission states (DESIGN.md §13.3). Deliberately no new colours: these reuse
+   the readiness palette, which is already checked against its backgrounds in
+   tests/test_accessibility_contrast.py. Every badge also says its state in
+   words, so the hue is the second signal and never the only one. */
+.badge-live { background: #dff0e0; color: #1d5b28; }
+.badge-in_review { background: #f6e7c8; color: #6b4a06; }
+.badge-withdrawn { background: #f7dcdc; color: #7c1d1d; }
+.submission.state-live { border-left: 3px solid #2f7d3b; }
+
 .draft.is-ready { border-left: 3px solid #2f7d3b; }
 .blockers {
   margin: 0.35rem 0 0;

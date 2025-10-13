@@ -32,6 +32,7 @@ from scholardrop.dspace import DSpaceError, DSpaceValidationError
 from scholardrop.routes.deps import (
     DraftId,
     dspace_client,
+    record_deposit,
     release_draft,
     render,
     require_session,
@@ -43,6 +44,7 @@ from scholardrop.submission.definition import (
     load_sections,
     load_vocabularies,
 )
+from scholardrop.submission.drafts import first_value
 from scholardrop.submission.form import (
     FormField,
     FormValue,
@@ -60,6 +62,21 @@ from scholardrop.submission.patch import (
 
 router = APIRouter()
 log = logging.getLogger("scholardrop.review")
+
+TITLE_FIELD = "dc.title"
+
+
+def _submitted_title(submitted: dict[tuple[str, str], list[str]]) -> str:
+    """The title as the user approved it, whichever section carries the field.
+
+    A fallback for the log row (DESIGN.md §13.3), because the patched item is
+    the *repository's* echo -- and a title we never read back is still a title
+    that was deposited. The values here are the ones actually sent.
+    """
+    for (_section, field), values in submitted.items():
+        if field == TITLE_FIELD and values:
+            return values[0]
+    return ""
 
 
 class _Configuration:
@@ -343,6 +360,21 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         wsi_id,
         session.eperson_name,
         "archived" if result.archived else "entered workflow",
+    )
+    # Remember it, so /my-submissions can answer "where is my item?" after the
+    # workspaceitem that carried it has ceased to exist (DESIGN.md §13.3). After
+    # the deposit, and never able to fail it: the repository already has the item.
+    record_deposit(
+        request,
+        session,
+        instance,
+        wsi_id=wsi_id,
+        item=submitted_item,
+        archived_item=archived_item,
+        result=result,
+        collection_name=collection,
+        collection_uuid=str(live.item.sections.get("collection") or ""),
+        title=first_value(patched.sections, TITLE_FIELD) or _submitted_title(submitted),
     )
     # The repository has the file now, so the local copy has no further purpose
     # (DESIGN.md §8).

@@ -4,20 +4,19 @@ Creating the workspaceitem at upload time (§9, "State") buys resumability and
 costs draft cleanup -- this is the cleanup. The list is DSpace's own
 `findBySubmitter`, so it shows what the repository actually holds for this user,
 including drafts started in the DSpace UI rather than here.
+
+The row itself is built in `submission/drafts.py`, because the status page
+(§13.3) renders the same thing.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
-from scholardrop.dspace import DSpaceError
-from scholardrop.dspace.models import WorkspaceItem
 from scholardrop.routes.deps import (
     DraftId,
     dspace_client,
@@ -26,143 +25,15 @@ from scholardrop.routes.deps import (
     require_session,
     session_instance,
 )
-from scholardrop.submission.definition import load_form_configs, load_sections
-from scholardrop.submission.readiness import Readiness, assess, labels_from
+from scholardrop.submission.drafts import Draft, to_draft
+from scholardrop.timestamps import format_timestamp
+
+__all__ = ["PAGE_SIZE", "Draft", "format_timestamp", "router"]
 
 router = APIRouter()
 log = logging.getLogger("scholardrop.drafts")
 
 PAGE_SIZE = 10
-TITLE_FIELD = "dc.title"
-
-
-@dataclass
-class Draft:
-    """One row of the drafts list."""
-
-    id: str
-    title: str
-    collection_name: str
-    last_modified: str
-    filenames: list[str]
-    readiness: Readiness = field(default_factory=Readiness)
-    #: The raw value, for the `<time datetime="...">` attribute.
-    last_modified_iso: str = ""
-
-
-def format_timestamp(raw: str | None) -> str:
-    """A draft's last-changed time, precise enough to tell two of them apart.
-
-    This used to be `raw[:10]` -- the date and nothing else -- so a dozen drafts
-    started in one testing session all read "last changed 2026-06-04" and looked
-    like the same thing saved repeatedly. They were a dozen separate submissions
-    minutes apart. Truncation invented a pattern that was not in the data.
-
-    DSpace sends UTC (`2026-07-28T06:37:16.538Z`). It is rendered as UTC and
-    labelled as such: converting to the server's timezone would be a guess about
-    where the reader is, and an unlabelled hour is worse than an honest one.
-    """
-    if not raw:
-        return ""
-    text = raw.strip()
-    try:
-        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        # An unparseable timestamp is still information; show what came back
-        # rather than dropping it or pretending to a precision we do not have.
-        return text
-    if moment.tzinfo is None:
-        return moment.strftime("%Y-%m-%d %H:%M")
-    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
-
-
-def _first_value(sections: dict[str, Any], metadata_field: str) -> str:
-    """The first value of a metadata field, wherever in the form it lives."""
-    for data in sections.values():
-        if not isinstance(data, dict):
-            continue
-        entries = data.get(metadata_field) or []
-        if isinstance(entries, list):
-            for entry in entries:
-                if isinstance(entry, dict) and entry.get("value"):
-                    return str(entry["value"])
-    return ""
-
-
-def _filenames(sections: dict[str, Any]) -> list[str]:
-    upload = sections.get("upload")
-    files = (upload or {}).get("files") if isinstance(upload, dict) else None
-    names = []
-    for entry in files or []:
-        if isinstance(entry, dict) and entry.get("name"):
-            names.append(str(entry["name"]))
-    return names
-
-
-async def _labels(
-    client: Any, item: WorkspaceItem, *, cache: Any, instance_key: str, memo: dict[str, Any]
-) -> tuple[dict[str, str], bool]:
-    """Field labels for this draft's collection, or nothing and an honest flag.
-
-    Keyed by the submission definition rather than the collection, because two
-    collections sharing a definition share their labels. `memo` spans the page;
-    the `ConfigCache` underneath spans the hour, so the second page of drafts
-    usually fetches nothing.
-    """
-    definition = (item.raw.get("_links") or {}).get("submissionDefinition", {}).get("href", "")
-    key = str(definition or item.sections.get("collection") or item.id)
-    if key in memo:
-        labels = memo[key]
-        return (labels, True) if labels is not None else ({}, False)
-
-    try:
-        sections = await load_sections(client, item, cache=cache, instance_key=instance_key)
-        configs = await load_form_configs(client, sections, cache=cache, instance_key=instance_key)
-        labels = labels_from(configs)
-    except DSpaceError as exc:
-        # A draft whose form config we cannot read still gets to say what is
-        # wrong with it, in DSpace's own field names. Never take the list down.
-        log.info("could not read the form config for draft %s: %s", item.id, exc)
-        memo[key] = None
-        return {}, False
-
-    memo[key] = labels
-    return labels, True
-
-
-async def _to_draft(
-    client: Any,
-    item: WorkspaceItem,
-    names: dict[str, str],
-    *,
-    cache: Any,
-    instance_key: str,
-    labels_memo: dict[str, Any],
-) -> Draft:
-    collection_uuid = item.sections.get("collection")
-    collection_name = ""
-    if isinstance(collection_uuid, str) and collection_uuid:
-        if collection_uuid not in names:
-            try:
-                names[collection_uuid] = (await client.collection(collection_uuid)).name
-            except DSpaceError as exc:
-                # A draft whose collection we cannot read is still resumable.
-                log.info("could not name collection %s: %s", collection_uuid, exc)
-                names[collection_uuid] = ""
-        collection_name = names[collection_uuid]
-
-    labels, labelled = await _labels(
-        client, item, cache=cache, instance_key=instance_key, memo=labels_memo
-    )
-    return Draft(
-        id=item.id,
-        title=_first_value(item.sections, TITLE_FIELD),
-        collection_name=collection_name,
-        last_modified=format_timestamp(item.last_modified),
-        last_modified_iso=item.last_modified or "",
-        filenames=_filenames(item.sections),
-        readiness=assess(item, labels, labelled=labelled),
-    )
 
 
 @router.get("/drafts", response_class=HTMLResponse)
@@ -180,7 +51,7 @@ async def drafts_list(request: Request, page: int = Query(0, ge=0)) -> HTMLRespo
     async with dspace_client(request, session) as client:
         results = await client.find_by_submitter(session.eperson_uuid, page=page, size=PAGE_SIZE)
         items = [
-            await _to_draft(
+            await to_draft(
                 client,
                 item,
                 names,
@@ -219,7 +90,7 @@ async def draft_actions(request: Request, wsi_id: DraftId) -> HTMLResponse:
     session = require_session(request)
     async with dspace_client(request, session) as client:
         item = await client.get_workspaceitem(wsi_id)
-        draft = await _to_draft(
+        draft = await to_draft(
             client,
             item,
             {},

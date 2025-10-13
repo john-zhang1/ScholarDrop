@@ -119,6 +119,9 @@ def app(shipped_config_dir: Path, tmp_path: Path, fake_dspace, fake_extractor):
         # Never the repo's real one: a developer who has run the harvester would
         # otherwise be testing against whatever their DSpace happens to hold.
         dedup_checksum_index_path=tmp_path / "checksums.sqlite",
+        # Same reasoning: a developer's own deposit history must not turn up in a
+        # test, and a test must not append to it.
+        submissions_log_path=tmp_path / "submissions.sqlite",
     )
     return create_app(
         settings,

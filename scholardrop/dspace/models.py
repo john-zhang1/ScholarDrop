@@ -277,6 +277,14 @@ class WorkspaceItem(BaseModel):
     is the collection's *configuration* (which sections exist, and their fields).
     Phase 4 renders the form from the definition rather than hardcoding section
     names (DESIGN.md §3).
+
+    **There is no item uuid here, and none can be derived.** Every `_links` entry
+    on a workspaceitem is a *sub-resource* under itself -- `_links.item.href` is
+    `/submission/workspaceitems/{id}/item`, not `/core/items/{uuid}` (checked
+    against 9.2, 2026-07-30). Reading the uuid off the link looks like it works
+    and yields the literal string `item`. The uuid only exists once the link is
+    followed, which is why the deposit path resolves it *before* depositing and
+    the status page merges on workspaceitem ids instead (DESIGN.md §13.3).
     """
 
     id: str
@@ -431,6 +439,55 @@ class WorkflowItem(BaseModel):
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> WorkflowItem:
         return cls(id=str(payload.get("id", "")), self_link=_self_link(payload), raw=payload)
+
+
+class ItemStatus(BaseModel):
+    """Where a deposited item has got to (DESIGN.md §13.3).
+
+    `/core/items/{uuid}` answers most of it in one read: `inArchive` is true once
+    the item is public, and the handle is minted at the same moment. A false
+    `inArchive` means the submission is still in progress somewhere -- in review,
+    or back with its submitter after a rejection -- and only then is a second
+    call needed to say which.
+
+    `found` is false when the item is gone; `checked` is false when the lookup
+    itself could not be completed, which is a different thing and has to stay
+    different: "your submission was removed" and "we could not ask just now"
+    must never render as the same sentence.
+    """
+
+    uuid: str = ""
+    found: bool = False
+    checked: bool = True
+    in_archive: bool = False
+    withdrawn: bool = False
+    handle: str = ""
+    in_workflow: bool = False
+    workflow_id: str = ""
+    #: Set when the submission is back with its submitter. A rejected workflow
+    #: item becomes a *new* workspaceitem with a new id, so this is the only way
+    #: to offer a working "Resume" for something that was already deposited once.
+    workspaceitem_id: str = ""
+    last_modified: str = ""
+
+    @classmethod
+    def from_item(cls, payload: dict[str, Any]) -> ItemStatus:
+        return cls(
+            uuid=str(payload.get("uuid") or ""),
+            found=True,
+            in_archive=bool(payload.get("inArchive")),
+            withdrawn=bool(payload.get("withdrawn")),
+            handle=str(payload.get("handle") or ""),
+            last_modified=str(payload.get("lastModified") or ""),
+        )
+
+    @classmethod
+    def gone(cls, uuid: str = "") -> ItemStatus:
+        return cls(uuid=uuid, found=False, checked=True)
+
+    @classmethod
+    def unchecked(cls, uuid: str = "") -> ItemStatus:
+        return cls(uuid=uuid, found=False, checked=False)
 
 
 class DepositResult(BaseModel):
