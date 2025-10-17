@@ -27,7 +27,7 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from scholardrop.dedup.check import exact_file_matches
@@ -48,6 +48,7 @@ from scholardrop.routes.deps import (
     require_session,
     session_instance,
 )
+from scholardrop.submission.defaults import apply_defaults, apply_seed
 from scholardrop.submission.storage import UploadRejected, session_upload_dir, store_upload
 
 router = APIRouter()
@@ -158,6 +159,11 @@ async def upload(
             )
             response.status_code = 403
             return response
+
+        # Before the file, because a draft the repository refuses the bitstream
+        # for is deleted below -- and after the identifier, because a registry
+        # record outranks a default and this only fills what it left empty.
+        await _seed_new_draft(request, client, instance, item)
 
         if stored is not None:
             try:
@@ -303,18 +309,90 @@ async def _create_draft(
     return await client.create_workspaceitem(collection_uuid), None
 
 
+async def _seed_new_draft(request: Request, client: Any, instance: Any, item: Any) -> None:
+    """Give a brand-new draft the values nobody should have to type (DESIGN.md §13.4)."""
+    if not request.app.state.settings.defaults_enabled:
+        return
+    await apply_defaults(
+        client,
+        item,
+        profile=request.app.state.registry.profile_for(instance),
+        cache=request.app.state.form_configs,
+        instance_key=instance.key,
+    )
+
+
+@router.post("/submit/like", response_class=HTMLResponse)
+async def submit_like(request: Request) -> Response:
+    """Start a draft like the one just deposited (DESIGN.md §13.4).
+
+    The seed is written by the deposit that produced it and lives in the session,
+    so this creates a real draft in the same collection with the shared context
+    already in place -- and nothing that belongs to the deposited work. It is the
+    ordinary submission flow from there: the review form, the confirm step, and an
+    explicit deposit.
+    """
+    session = require_session(request)
+    instance = session_instance(request, session)
+    seed = session.data.get("submit_like") or {}
+    collection_uuid = str(seed.get("collection_uuid") or "")
+    if not request.app.state.settings.defaults_enabled or not collection_uuid:
+        # Nothing to seed from -- a restarted process, or a bookmarked POST.
+        return RedirectResponse("/browse", status_code=303)
+
+    async with dspace_client(request, session) as client:
+        try:
+            item = await client.create_workspaceitem(collection_uuid)
+        except DSpaceForbidden:
+            log.info(
+                "create_workspaceitem denied for %s in collection %s",
+                session.eperson_name,
+                collection_uuid,
+            )
+            response = render(
+                request,
+                "partials/denied_inline.html",
+                collection_name=seed.get("collection_name"),
+            )
+            response.status_code = 403
+            return response
+        await apply_seed(
+            client,
+            item,
+            seed.get("values") or {},
+            cache=request.app.state.form_configs,
+            instance_key=instance.key,
+        )
+
+    session.collection_uuid = collection_uuid
+    session.data["collection_name"] = seed.get("collection_name")
+    session.workspaceitem_id = item.id
+    # No file and no extraction: this draft's values came from the last deposit,
+    # and the review form renders perfectly well with no job behind it.
+    session.remember_submission(item.id, filename="", path="")
+    request.app.state.sessions.save(session)
+    log.info("draft %s started from the deposit before it", item.id)
+
+    if is_htmx(request):
+        return Response(status_code=204, headers={"HX-Redirect": f"/review/{item.id}"})
+    return RedirectResponse(f"/review/{item.id}", status_code=303)
+
+
 @router.post("/submit/{wsi_id}/continue", response_class=HTMLResponse)
-async def proceed(request: Request, wsi_id: DraftId) -> Response:
-    """The user read the duplicate warning and decided to submit anyway.
+async def proceed(request: Request, wsi_id: DraftId, warning: str = Query("duplicate")) -> Response:
+    """The user read the warning and decided to submit anyway.
 
     A POST rather than a link, and logged, because "somebody was told this file is
     already here and deposited it regardless" is exactly the thing a repository
-    manager asks about afterwards.
+    manager asks about afterwards. Which warning it was is logged with it: the
+    duplicate one (DESIGN.md §12) and the scanned-PDF one (§13.4) share this exit,
+    and they are not the same event.
     """
     session = require_session(request)
     log.info(
-        "%s continued past a duplicate warning on workspaceitem %s",
+        "%s continued past a %s warning on workspaceitem %s",
         session.eperson_name,
+        "duplicate" if warning not in {"duplicate", "scan"} else warning,
         wsi_id,
     )
     if is_htmx(request):
@@ -387,6 +465,20 @@ async def status(request: Request, wsi_id: DraftId) -> Response:
             # the session is where the identifier lives.
             identifier=session.submission(wsi_id).get("identifier"),
         )
+
+    # A scan is worth one click of the user's attention (DESIGN.md §13.4), and
+    # this is the last moment there is one: the next thing this panel does is
+    # redirect. The draft, the file and the extraction are all done -- nothing
+    # here refuses anything.
+    if job is not None and job.scanned and request.app.state.settings.scanned_warning_enabled:
+        log.info("workspaceitem %s has no text layer; warning before the form", wsi_id)
+        return render(
+            request,
+            "partials/scanned_pdf.html",
+            wsi_id=wsi_id,
+            filename=job.filename,
+        )
+
     # No job (a restart, or a stale poll) is treated as finished -- the review
     # form renders either way, which is the promise extraction must keep.
     return Response(status_code=204, headers={"HX-Redirect": f"/review/{wsi_id}"})

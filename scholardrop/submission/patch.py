@@ -25,9 +25,11 @@ import logging
 from typing import Any, NamedTuple
 
 from scholardrop.dspace.models import WorkspaceItem
+from scholardrop.extract.language import LANGUAGE_NAMES
 from scholardrop.orcid import CF_ACCEPTED, OrcidPolicy, is_orcid
 from scholardrop.submission.form import (
     FORM_SECTION,
+    LANG_SUFFIX,
     LICENSE_SECTION,
     ORCID_SUFFIX,
     parse_fields,
@@ -43,13 +45,16 @@ LICENSE_PATH = f"/sections/{LICENSE_SECTION}/granted"
 Submitted = dict[tuple[str, str], list[str]]
 # ORCID iDs, aligned with the values of the same key.
 Orcids = dict[tuple[str, str], list[str]]
+# Language codes, aligned the same way (DESIGN.md §13.4).
+Languages = dict[tuple[str, str], list[str]]
 
 
 class Row(NamedTuple):
-    """One row of one field: what was typed, and the iD chosen for it."""
+    """One row of one field: what was typed, and what was chosen alongside it."""
 
     value: str
     orcid: str = ""
+    language: str = ""
 
 
 def field_index(
@@ -69,12 +74,12 @@ def field_index(
 def parse_rows(
     items: list[tuple[str, str]], allowed: dict[tuple[str, str], Any]
 ) -> dict[tuple[str, str], list[Row]]:
-    """Read the form's inputs as rows: a value, and the iD chosen for it.
+    """Read the form's inputs as rows: a value, and what was chosen alongside it.
 
-    Every row renders its value input immediately followed by a hidden
-    `…::orcid`, so pairing is by document order rather than by index -- an empty
-    row contributes no value, and an index-based pairing would then hand its iD
-    to the next author down the list.
+    Every row renders its value input immediately followed by its hidden
+    `…::orcid` and `…::lang`, so pairing is by document order rather than by
+    index -- an empty row contributes no value, and an index-based pairing would
+    then hand its iD (or its language) to the next row down the list.
 
     `items` is the form's multi-items, so a repeatable field arrives as several
     pairs with the same name and their order is the order the user sees.
@@ -83,22 +88,27 @@ def parse_rows(
     for name, raw in items:
         if NAME_SEPARATOR not in name:
             continue
-        is_orcid_input = name.endswith(ORCID_SUFFIX)
-        base = name[: -len(ORCID_SUFFIX)] if is_orcid_input else name
+        companion = next((s for s in (ORCID_SUFFIX, LANG_SUFFIX) if name.endswith(s)), "")
+        base = name[: -len(companion)] if companion else name
         section_id, _, metadata_field = base.partition(NAME_SEPARATOR)
         key = (section_id, metadata_field)
         if key not in allowed:
-            if not is_orcid_input:
+            if not companion:
                 log.info("ignoring submitted value for unconfigured field %s", name)
             continue
         value = str(raw).strip()
-        if is_orcid_input:
+        if companion:
             # Belongs to the row just read. A stray one with no row before it is
             # a crafted post, and has nothing to attach to.
             if rows.get(key):
-                rows[key][-1] = Row(rows[key][-1].value, value)
+                row = rows[key][-1]
+                rows[key][-1] = (
+                    row._replace(orcid=value)
+                    if companion == ORCID_SUFFIX
+                    else row._replace(language=value)
+                )
             continue
-        rows.setdefault(key, []).append(Row(value, ""))
+        rows.setdefault(key, []).append(Row(value))
     return rows
 
 
@@ -130,6 +140,23 @@ def parse_orcids(
     return aligned
 
 
+def parse_languages(items: list[tuple[str, str]], allowed: dict[tuple[str, str], Any]) -> Languages:
+    """The languages, positionally aligned with `parse_submission`'s values.
+
+    Only codes the picker offers are kept: the language key ends up in the
+    repository's index, and an unrecognised one posted by hand would sit there
+    for ever. An empty code means the repository's default language, which is
+    what an ordinary submission wants and what most rows carry.
+    """
+    aligned: Languages = {}
+    for key, rows in parse_rows(items, allowed).items():
+        kept = [row for row in rows if row.value]
+        chosen = [row.language if row.language in LANGUAGE_NAMES else "" for row in kept]
+        if any(chosen):
+            aligned[key] = chosen
+    return aligned
+
+
 def license_granted(items: list[tuple[str, str]]) -> bool:
     """An unchecked checkbox is simply absent from the POST."""
     return any(name == LICENSE_FIELD for name, _ in items)
@@ -151,6 +178,7 @@ def build_operations(
     *,
     grant_license: bool = False,
     orcids: Orcids | None = None,
+    languages: Languages | None = None,
     policy: OrcidPolicy | None = None,
 ) -> list[dict[str, Any]]:
     """The smallest patch that makes the draft match the form.
@@ -165,13 +193,18 @@ def build_operations(
     here writes a dangling authority key into a live index.
     """
     orcids = orcids or {}
+    languages = languages or {}
     operations: list[dict[str, Any]] = []
     for (section_id, metadata_field), values in submitted.items():
         path = f"/sections/{section_id}/{metadata_field}"
         stored = stored_values(item, section_id, metadata_field)
         chosen = orcids.get((section_id, metadata_field), [])
+        tagged = languages.get((section_id, metadata_field), [])
         authoritative = bool(policy and policy.stores_authority and any(chosen))
-        if values == stored and not authoritative:
+        # Same rule as the authority key: the stored comparison is of values
+        # alone, so a field whose *text* is unchanged but whose language has been
+        # set would otherwise produce no operation and lose the choice.
+        if values == stored and not authoritative and not any(tagged):
             continue
         if values:
             operations.append(
@@ -179,7 +212,12 @@ def build_operations(
                     "op": "add",
                     "path": path,
                     "value": [
-                        _value_object(v, chosen[i] if i < len(chosen) else "", authoritative)
+                        _value_object(
+                            v,
+                            chosen[i] if i < len(chosen) else "",
+                            authoritative,
+                            tagged[i] if i < len(tagged) else "",
+                        )
                         for i, v in enumerate(values)
                     ],
                 }
@@ -195,16 +233,26 @@ def build_operations(
     return operations
 
 
-def _value_object(value: str, orcid: str, authoritative: bool) -> dict[str, Any]:
-    """One entry of a metadata patch value, with its authority when that is the mode.
+def _value_object(
+    value: str, orcid: str, authoritative: bool, language: str = ""
+) -> dict[str, Any]:
+    """One entry of a metadata patch value: the text, and what qualifies it.
 
     `confidence` accompanies `authority` always: DSpace stores the pair, and a
     value with an authority key and no confidence is indexed at "unset", which
     excludes it from the authority-controlled browse the key exists to feed.
+
+    `language` is `MetadataValueRest.language` -- the same key DSpace's own UI
+    writes, which is what makes two values of `dc.title` a title and its
+    translation rather than two titles (DESIGN.md §13.4).
     """
-    if not (authoritative and orcid):
-        return {"value": value}
-    return {"value": value, "authority": orcid, "confidence": CF_ACCEPTED}
+    entry: dict[str, Any] = {"value": value}
+    if authoritative and orcid:
+        entry["authority"] = orcid
+        entry["confidence"] = CF_ACCEPTED
+    if language:
+        entry["language"] = language
+    return entry
 
 
 def _orcid_field_operations(

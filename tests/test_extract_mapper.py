@@ -59,10 +59,10 @@ def test_author_order_is_preserved(metadata, profile) -> None:
 
 
 def test_unmapped_fields_are_reported_not_dropped(metadata, profile) -> None:
-    """shareok-etd maps seven of eleven fields; the rest must surface for the user."""
+    """shareok-etd leaves three extracted fields with nowhere to go; they surface."""
     mapped = map_metadata(metadata, profile)
 
-    assert set(mapped.unmapped) == {"degree", "department", "language", "doc_type"}
+    assert set(mapped.unmapped) == {"degree", "department", "doc_type"}
     assert mapped.unmapped["degree"] == ["Doctor of Philosophy"]
 
 

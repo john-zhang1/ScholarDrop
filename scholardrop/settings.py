@@ -142,6 +142,30 @@ class Settings(BaseSettings):
     # thousands of people and tells the person typing nothing.
     orcid_min_query_length: int = 3
 
+    # Metadata quality helpers (DESIGN.md §13.4). Four independent slices, four
+    # flags: a repository can take the ones it wants and leave the rest.
+    #
+    # Slice 1: the mapping profile's `defaults:` block, written into a new draft,
+    # and "submit another like this" on the confirmation screen. Harmless on a
+    # profile with no defaults -- it costs nothing and writes nothing.
+    defaults_enabled: bool = True
+    # Slice 2: type-ahead for a field bound to a controlled vocabulary whose
+    # entries cannot be listed. Every DSpace vocabulary backed by a controlled-
+    # vocabulary XML file is "not scrollable" and answers 422 to a plain listing,
+    # which used to leave those fields as bare text boxes.
+    vocabulary_typeahead_enabled: bool = True
+    vocabulary_max_suggestions: int = 10
+    # Below this many characters the type-ahead does not ask -- the same reason
+    # as ORCID's: one letter matches a whole vocabulary and tells nobody anything.
+    vocabulary_min_query_length: int = 2
+    # Slice 3: say so when the uploaded PDF has no text layer. Proceeding is
+    # always allowed; this is about the submitter knowing the item will not be
+    # full-text searchable, not about refusing it.
+    scanned_warning_enabled: bool = True
+    # Slice 4: detect the document's language, and offer parallel (translated)
+    # values on the fields that carry a work's own words.
+    bilingual_enabled: bool = True
+
     # The submission status page (DESIGN.md §13.3). Off means no deposit is
     # logged and /my-submissions lists only what DSpace itself knows -- the
     # drafts. Worth having: the log is the one piece of state this app keeps

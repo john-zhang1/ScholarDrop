@@ -48,7 +48,9 @@
       <span class="quiet metadata-field">{{ field.config.metadata_field }}</span></dt>
     <dd>
       {% for value in field.values if value.value %}
-      <div class="summary-value">{{ value.value }}</div>
+      <div class="summary-value">{{ value.value }}
+        {% if value.language %}<span class="quiet">· in {{ value.language }}</span>{% endif %}
+      </div>
       {% endfor %}
     </dd>
     {% endfor %}
@@ -71,6 +73,12 @@
            between the summary and the deposit, silently. #}
         {% if field.orcid_lookup %}
       <input type="hidden" name="{{ field.orcid_name }}" value="{{ value.orcid }}">
+        {% endif %}
+        {# And the language of this value, for the same reason: it is chosen on the
+           review form and only written at deposit, so it has to survive this page
+           (DESIGN.md §13.4). #}
+        {% if field.translatable %}
+      <input type="hidden" name="{{ field.lang_name }}" value="{{ value.language }}">
         {% endif %}
         {% endfor %}
       {% else %}

@@ -20,6 +20,7 @@ complaints against the fields that caused them.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -38,6 +39,7 @@ from scholardrop.routes.deps import (
     require_session,
     session_instance,
 )
+from scholardrop.submission.defaults import carry_over
 from scholardrop.submission.definition import (
     config_hrefs,
     load_form_configs,
@@ -56,6 +58,7 @@ from scholardrop.submission.patch import (
     build_operations,
     field_index,
     license_granted,
+    parse_languages,
     parse_orcids,
     parse_submission,
 )
@@ -64,6 +67,9 @@ router = APIRouter()
 log = logging.getLogger("scholardrop.review")
 
 TITLE_FIELD = "dc.title"
+# What DSpace's own configuration allows a vocabulary to be called; this one is
+# interpolated into a request path, so it is checked rather than trusted.
+_VOCABULARY_NAME = re.compile(r"[A-Za-z0-9][\w.:-]{0,63}")
 
 
 def _submitted_title(submitted: dict[tuple[str, str], list[str]]) -> str:
@@ -103,6 +109,22 @@ async def _load(client: Any, wsi_id: str, *, cache: Any, instance_key: str) -> _
     return _Configuration(item, sections, configs, vocabularies)
 
 
+def _typeahead(request: Request) -> bool:
+    """Whether a vocabulary-bound field searches its vocabulary (DESIGN.md §13.4)."""
+    return bool(request.app.state.settings.vocabulary_typeahead_enabled)
+
+
+def _translatable(request: Request, instance: Any) -> frozenset[str]:
+    """Which fields may carry a parallel value in another language (§13.4).
+
+    The instance's mapping profile decides -- `dc.title` is only the usual name
+    for a title -- and the slice's flag decides whether the offer is made at all.
+    """
+    if not request.app.state.settings.bilingual_enabled:
+        return frozenset()
+    return request.app.state.registry.profile_for(instance).translatable_fields()
+
+
 def _orcid_policy(request: Request, instance: Any, live: _Configuration) -> Any:
     """This instance's ORCID storage mode, read against this collection's form."""
     return orcid_lookup.policy_for(
@@ -135,6 +157,8 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
             mapped=mapped,
             vocabularies=live.vocabularies,
             orcid_policy=policy,
+            vocabulary_typeahead=_typeahead(request),
+            translatable_fields=_translatable(request, instance),
         )
         # Inside the block: the duplicate check may need a Discovery query, and
         # building a second client for it would mean a second CSRF/JWT round trip
@@ -162,6 +186,9 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
         identifier_url=draft.get("identifier_url"),
         identifier_source=draft.get("identifier_source"),
         registry_notice=job.registry_notice if job else None,
+        # The PDF had no text layer (DESIGN.md §13.4). Said on the form as well as
+        # on the progress screen: without JavaScript the upload lands here directly.
+        scanned=bool(job and job.scanned and request.app.state.settings.scanned_warning_enabled),
         orcid_policy=policy,
     )
 
@@ -187,7 +214,10 @@ async def edit(request: Request, wsi_id: DraftId) -> HTMLResponse:
         vocabularies=live.vocabularies,
         submitted=submitted,
         submitted_orcids=parse_orcids(posted, live.allowed),
+        submitted_languages=parse_languages(posted, live.allowed),
         orcid_policy=policy,
+        vocabulary_typeahead=_typeahead(request),
+        translatable_fields=_translatable(request, instance),
     )
     return render(
         request,
@@ -228,7 +258,10 @@ async def confirm(request: Request, wsi_id: DraftId) -> HTMLResponse:
         vocabularies=live.vocabularies,
         submitted=submitted,
         submitted_orcids=parse_orcids(posted, live.allowed),
+        submitted_languages=parse_languages(posted, live.allowed),
         orcid_policy=policy,
+        vocabulary_typeahead=_typeahead(request),
+        translatable_fields=_translatable(request, instance),
     )
     return render(
         request,
@@ -260,6 +293,7 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         policy = _orcid_policy(request, instance, live)
         submitted = parse_submission(posted, live.allowed)
         orcids = parse_orcids(posted, live.allowed)
+        languages = parse_languages(posted, live.allowed)
 
         def back(message: str, errors: dict[str, list[str]], status: int) -> HTMLResponse:
             form = build_form(
@@ -269,8 +303,11 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
                 vocabularies=live.vocabularies,
                 submitted=submitted,
                 submitted_orcids=orcids,
+                submitted_languages=languages,
                 extra_errors=errors,
                 orcid_policy=policy,
+                vocabulary_typeahead=_typeahead(request),
+                translatable_fields=_translatable(request, instance),
             )
             response = render(
                 request,
@@ -293,7 +330,12 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
             )
 
         operations = build_operations(
-            live.item, submitted, grant_license=True, orcids=orcids, policy=policy
+            live.item,
+            submitted,
+            grant_license=True,
+            orcids=orcids,
+            languages=languages,
+            policy=policy,
         )
         try:
             patched = await client.patch_sections(wsi_id, operations)
@@ -379,6 +421,14 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
     # The repository has the file now, so the local copy has no further purpose
     # (DESIGN.md §8).
     release_draft(request, session, wsi_id)
+    seeded = _remember_for_next(
+        request,
+        session,
+        instance,
+        submitted=submitted,
+        collection_uuid=str(live.item.sections.get("collection") or ""),
+        collection_name=collection,
+    )
 
     return render(
         request,
@@ -386,7 +436,42 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         result=result,
         archived_item=archived_item,
         collection_name=collection,
+        # What "submit another like this" would carry over, so the offer can say
+        # so rather than springing a pre-filled form on somebody (DESIGN.md §13.4).
+        seeded_fields=seeded,
     )
+
+
+def _remember_for_next(
+    request: Request,
+    session: Any,
+    instance: Any,
+    *,
+    submitted: dict[tuple[str, str], list[str]],
+    collection_uuid: str,
+    collection_name: str,
+) -> list[str]:
+    """Keep what the next submission could reuse, and say what that is.
+
+    Written after the deposit, from the values the submitter approved rather than
+    from the repository's echo of them -- this is "the last thing you sent", not
+    "what the item now holds". Returns the metadata fields it kept, which is what
+    the confirmation screen names.
+    """
+    if not request.app.state.settings.defaults_enabled or not collection_uuid:
+        return []
+    profile = request.app.state.registry.profile_for(instance)
+    values = carry_over(submitted, profile)
+    if not values:
+        session.data.pop("submit_like", None)
+        return []
+    session.data["submit_like"] = {
+        "collection_uuid": collection_uuid,
+        "collection_name": collection_name,
+        "values": values,
+    }
+    request.app.state.sessions.save(session)
+    return sorted({name.partition("::")[2] for name in values})
 
 
 @router.get("/review/{wsi_id}/orcid", response_class=HTMLResponse)
@@ -422,17 +507,77 @@ async def orcid_suggestions(
     )
 
 
+@router.get("/review/{wsi_id}/vocabulary", response_class=HTMLResponse)
+async def vocabulary_suggestions(
+    request: Request,
+    wsi_id: DraftId,
+    vocabulary: str = Query(""),
+    field: str = Query(""),
+    name: str = Query(""),
+    q: str = Query(""),
+) -> HTMLResponse:
+    """Type-ahead against one of the repository's controlled vocabularies (§13.4).
+
+    Which vocabulary comes from the query string rather than being re-derived
+    from the draft's form configuration, and that is a deliberate trade: reading
+    it back would cost a workspaceitem read *per keystroke*, and the endpoint it
+    reaches is `permitAll` in DSpace -- a signed-in user asking for a vocabulary
+    by name learns nothing they could not ask the repository for directly. The
+    name is still checked against the shape a vocabulary name can have, because
+    it is interpolated into a URL path.
+
+    Like ORCID's, this never fails loudly: a vocabulary that cannot be read
+    leaves the box a plain text input, which is what it was before this existed.
+    """
+    session = require_session(request)
+    settings = request.app.state.settings
+    typed = (q or (request.query_params.get(name, "") if name else "")).strip()
+
+    entries: list[Any] = []
+    unavailable = False
+    if (
+        settings.vocabulary_typeahead_enabled
+        and _VOCABULARY_NAME.fullmatch(vocabulary)
+        and len(typed) >= settings.vocabulary_min_query_length
+    ):
+        async with dspace_client(request, session) as client:
+            try:
+                entries = await client.vocabulary_matches(
+                    vocabulary, typed, size=settings.vocabulary_max_suggestions
+                )
+            except DSpaceError as exc:
+                log.info("vocabulary %s could not be searched: %s", vocabulary, exc)
+                unavailable = True
+
+    return render(
+        request,
+        "partials/vocabulary_results.html",
+        entries=entries,
+        field=field,
+        query=typed,
+        unavailable=unavailable,
+        min_length=settings.vocabulary_min_query_length,
+    )
+
+
 @router.get("/review/{wsi_id}/row", response_class=HTMLResponse)
 async def add_row(
     request: Request,
     wsi_id: DraftId,
     section: str = Query(...),
     field: str = Query(...),
+    translation: bool = Query(False),
 ) -> HTMLResponse:
-    """One more empty input for a repeatable field.
+    """One more empty input for a repeatable field, or for a translation.
 
     The field's configuration is re-read rather than remembered, so a row can
     never be rendered with a shape the collection does not actually have.
+
+    `translation=1` is the one case where a *non-repeatable* field gains a row
+    (DESIGN.md §13.4): a title and its translation are two values of one field,
+    distinguished by their language key, and DSpace's own submission form does
+    the same. It is still refused unless this instance's profile says that field
+    holds the work's own words -- an extra `dc.date.issued` is not a translation.
     """
     session = require_session(request)
     instance = session_instance(request, session)
@@ -452,8 +597,12 @@ async def add_row(
             client, configs, cache=cache, instance_key=instance.key
         )
 
+    translatable = _translatable(request, instance)
     match = next((f for f in parse_fields(config) if f.metadata_field == field), None)
-    if match is None or not match.repeatable:
+    wanted = match is not None and (
+        match.repeatable or (translation and match.metadata_field in translatable)
+    )
+    if not wanted:
         # Nothing to add: an unknown or non-repeatable field gets an empty swap
         # rather than an error page in the middle of a form.
         log.info("ignored add-row for %s/%s on workspaceitem %s", section, field, wsi_id)
@@ -463,14 +612,22 @@ async def add_row(
     policy = orcid_lookup.policy_for(
         instance, profile, enabled=request.app.state.settings.orcid_enabled
     )
+    options = vocabularies.get(match.vocabulary or "", [])
+    orcid = policy.offers_lookup(match.metadata_field)
     form_field = FormField(
         config=match,
         section_id=section,
         values=[FormValue()],
-        options=vocabularies.get(match.vocabulary or "", []),
+        options=options,
         # An appended author row offers the lookup too, or the second author is
         # the only one who has to type an iD by hand.
-        orcid_lookup=policy.offers_lookup(match.metadata_field),
+        orcid_lookup=orcid,
+        # And an appended subject row searches the vocabulary, for the same
+        # reason: the help belongs to the field, not to its first row.
+        vocabulary_lookup=bool(
+            _typeahead(request) and match.vocabulary and not options and not orcid
+        ),
+        translatable=match.metadata_field in translatable,
     )
     # row_index=None: this row is appended, so it is never the first one and must
     # not repeat the id the field's <label for> points at.

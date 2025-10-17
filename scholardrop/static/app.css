@@ -315,6 +315,19 @@ textarea { width: 100%; resize: vertical; }
 .orcid-choice { text-align: left; font-size: 0.85rem; padding: 0.15rem 0; }
 .orcid-none { margin: 0.25rem 0 0; font-size: 0.8rem; }
 
+/* Controlled-vocabulary suggestions (DESIGN.md §13.4). The same shape as the
+   ORCID list on purpose: one mechanism on the page, one thing to learn. */
+.vocabulary-suggestions { flex-basis: 100%; }
+.vocabulary-results { margin: 0.25rem 0 0; }
+.vocabulary-heading { margin: 0 0 0.15rem; font-size: 0.8rem; }
+.vocabulary-choice { text-align: left; font-size: 0.85rem; padding: 0.15rem 0; }
+.vocabulary-none { margin: 0.25rem 0 0; font-size: 0.8rem; }
+
+/* The language of one value (DESIGN.md §13.4). Beside its value rather than
+   under it: the two are one statement, and a row that wraps on a narrow screen
+   keeps them together. */
+.row-language { font-size: 0.8rem; max-width: 14rem; }
+
 /* Draft readiness. Colour is a second signal, never the only one -- the badge
    says "Ready" or "Needs 3" in words, and the blockers are listed below it. */
 .badge-ready { background: #dff0e0; color: #1d5b28; }

@@ -43,7 +43,7 @@
   <p><strong>{{ job.error }}</strong> The form below is the collection's form, empty —
   fill it in yourself and deposit as usual.</p>
 </div>
-{% elif extraction and extraction.tier_used.value == 'none' and filename %}
+{% elif extraction and extraction.tier_used.value == 'none' and filename and not scanned %}
 <div class="notice" role="status">
   <p><strong>Nothing could be extracted from this PDF.</strong>
   {% if extraction.fallback_reason %}<span class="quiet">({{ extraction.fallback_reason }})</span>{% endif %}
@@ -61,6 +61,22 @@
     from {{ filename or identifier or 'the PDF' }}.</strong>
     Anything marked <span class="badge badge-check">check this</span> was guessed rather than
     read with confidence — check it before you deposit.
+  </p>
+</div>
+{% endif %}
+
+{# A block of its own, not another branch of the chain above (DESIGN.md §13.4): a
+   scan with good embedded metadata can pre-fill this form *and* leave an item
+   nobody can find by its contents, and both facts are worth saying. Shown here as
+   well as on the progress screen, because the no-JavaScript path goes straight
+   from the upload to this page and never sees that one. #}
+{% if scanned %}
+<div class="notice" role="status">
+  <p>
+    <strong>{{ filename or 'This PDF' }} has no text layer.</strong>
+    It is a scan — images of pages rather than text — so the deposited item will not
+    be full-text searchable. Depositing it is fine; a text-bearing version, if you
+    have one, would be findable by its contents.
   </p>
 </div>
 {% endif %}

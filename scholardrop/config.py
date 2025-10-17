@@ -42,6 +42,11 @@ EXTRACTED_FIELDS: frozenset[str] = frozenset(
 # single-valued ORCID field on a form means by "the author".
 AUTHOR_LIKE_FIELDS: tuple[str, ...] = ("authors", "advisor", "committee_members")
 
+# Extracted fields that hold the *work's own words*, and so are the ones a
+# bilingual item states twice (DESIGN.md §13.4). A date or a degree is the same
+# fact in any language; a title and an abstract are not.
+TRANSLATABLE_FIELDS: tuple[str, ...] = ("title", "abstract")
+
 # schema.element or schema.element.qualifier
 _METADATA_FIELD_RE = re.compile(r"^[a-zA-Z][\w]*\.[a-zA-Z][\w]*(\.[a-zA-Z][\w]*)?$")
 
@@ -169,6 +174,82 @@ class Instance(BaseModel):
         return ""
 
 
+def _check_metadata_fields(values: dict[str, list[str]], where: str) -> dict[str, list[str]]:
+    for name in values:
+        if not _METADATA_FIELD_RE.match(name):
+            raise ValueError(
+                f"{where}: {name!r} is not a schema.element[.qualifier] metadata field"
+            )
+    return values
+
+
+def _as_values(raw: Any, where: str) -> list[str]:
+    """One default's value(s): a scalar or a list, always read back as a list."""
+    values = raw if isinstance(raw, list) else [raw]
+    out = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, str | int | float):
+            raise ValueError(f"{where}: {value!r} is not a value a metadata field can hold")
+        text = str(value).strip()
+        if text:
+            out.append(text)
+    return out
+
+
+class ProfileDefaults(BaseModel):
+    """What a new draft starts with, before anybody has typed anything.
+
+    The YAML is a `defaults:` block of `metadata.field: value` pairs, with one
+    reserved key -- `collections:` -- holding the same shape again per collection
+    uuid. A metadata field always has a dot in it and `collections` does not, so
+    the two can never be confused for each other.
+
+    A default is a *starting point*, not a policy: it is written only into a field
+    the draft has left empty, and the submitter edits it like anything else.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    fields: dict[str, list[str]] = Field(default_factory=dict)
+    collections: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
+
+    @classmethod
+    def parse(cls, raw: Any) -> ProfileDefaults:
+        """Read the `defaults:` block of a mapping profile. Raises ValueError."""
+        if raw is None:
+            return cls()
+        if not isinstance(raw, dict):
+            raise ValueError("'defaults' must be a mapping of metadata field -> value")
+        per_collection: dict[str, dict[str, list[str]]] = {}
+        block = dict(raw)
+        collections = block.pop("collections", None)
+        if collections is not None:
+            if not isinstance(collections, dict):
+                raise ValueError("'defaults.collections' must be a mapping of collection -> values")
+            for uuid, body in collections.items():
+                if not isinstance(body, dict):
+                    raise ValueError(f"'defaults.collections.{uuid}' must be a mapping")
+                where = f"defaults.collections.{uuid}"
+                per_collection[str(uuid)] = _check_metadata_fields(
+                    {name: _as_values(value, where) for name, value in body.items()}, where
+                )
+        fields = _check_metadata_fields(
+            {name: _as_values(value, "defaults") for name, value in block.items()}, "defaults"
+        )
+        return cls(fields=fields, collections=per_collection)
+
+    def for_collection(self, collection_uuid: str) -> dict[str, list[str]]:
+        """The defaults that apply to a draft in this collection.
+
+        A collection's own entry *replaces* the profile-wide one field by field,
+        so a collection whose type differs says only that, and still inherits the
+        language everything else gets.
+        """
+        merged = dict(self.fields)
+        merged.update(self.collections.get(collection_uuid, {}))
+        return {name: values for name, values in merged.items() if values}
+
+
 class MappingProfile(BaseModel):
     """Extracted field name -> DSpace metadata field, for one instance flavour."""
 
@@ -176,6 +257,9 @@ class MappingProfile(BaseModel):
 
     name: str
     fields: dict[str, str]
+    # DESIGN.md §13.4: metadata a new draft is seeded with, per profile and per
+    # collection. Empty unless the profile configures a `defaults:` block.
+    defaults: ProfileDefaults = Field(default_factory=ProfileDefaults)
 
     @field_validator("fields")
     @classmethod
@@ -205,6 +289,18 @@ class MappingProfile(BaseModel):
         """
         return frozenset(
             field for name in AUTHOR_LIKE_FIELDS if (field := self.fields.get(name)) is not None
+        )
+
+    def translatable_fields(self) -> frozenset[str]:
+        """Metadata fields that can carry a parallel value in another language.
+
+        Read from the profile for the same reason as `author_fields`: which field
+        holds the title is a repository's decision, and a translation row offered
+        against `dc.title` on an instance that calls it something else would be
+        offered against the wrong box.
+        """
+        return frozenset(
+            field for name in TRANSLATABLE_FIELDS if (field := self.fields.get(name)) is not None
         )
 
 
@@ -254,10 +350,18 @@ def load_mapping_profile(path: Path) -> MappingProfile:
     raw = _read_yaml(path)
     if not isinstance(raw, dict) or not raw:
         raise ConfigError(path, "expected a non-empty mapping of extracted field -> metadata field")
+    # `defaults:` is the one key that is not an extracted field name (DESIGN.md
+    # §13.4); everything else in the file is the mapping itself.
+    body = dict(raw)
+    defaults_block = body.pop("defaults", None)
     try:
-        return MappingProfile(name=path.stem, fields=raw)
+        return MappingProfile(
+            name=path.stem, fields=body, defaults=ProfileDefaults.parse(defaults_block)
+        )
     except ValidationError as exc:
         raise ConfigError(path, _brief(exc)) from exc
+    except ValueError as exc:
+        raise ConfigError(path, str(exc)) from exc
 
 
 def load_registry(config_dir: Path) -> Registry:

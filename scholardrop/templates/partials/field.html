@@ -22,6 +22,20 @@
     {% endfor %}
   </div>
 
+  {# A translation is a second value of the same field carrying a language key
+     (DESIGN.md §13.4), so this is the add-row button with one extra parameter --
+     and it is offered on a field DSpace configures as single-valued, which is the
+     one place a row is added to one of those. #}
+  {% if field.translatable %}
+  <button type="button" class="link-button add-row add-translation"
+          aria-label="Add a translation of the {{ (field.config.label or field.config.metadata_field) | lower }}"
+          hx-get="/review/{{ form.workspaceitem_id }}/row?section={{ field.section_id | urlencode }}&amp;field={{ field.config.metadata_field | urlencode }}&amp;translation=1"
+          hx-target="#rows-{{ field.dom_id }}"
+          hx-swap="beforeend">
+    Add a translation
+  </button>
+  {% endif %}
+
   {% if field.config.repeatable %}
   <button type="button" class="link-button add-row"
           aria-label="Add another {{ (field.config.label or field.config.metadata_field) | lower }} value"

@@ -43,6 +43,12 @@ class ExtractionResult:
     # would not resolve must not cost the submitter their draft.
     registry_notice: str | None = None
     registry_used: bool = False
+    # The PDF has pages but (near enough) no text layer -- an image of a document
+    # rather than a document (DESIGN.md §13.4). Read off the reader rather than
+    # inferred from an empty extraction: a scanned thesis with good XMP metadata
+    # can pre-fill a form beautifully and still not be full-text searchable, and
+    # that is the thing worth saying.
+    scanned: bool = False
 
 
 # The seam tests substitute (like client_factory): everything the route knows
@@ -80,6 +86,7 @@ async def run_extraction(
     one says nothing about the file.
     """
     registry_notice: str | None = None
+    scanned = False
     registry = ExtractedMetadata()
     extracted = ExtractedMetadata()
 
@@ -103,11 +110,13 @@ async def run_extraction(
         return ExtractedMetadata()
 
     async def _pdf() -> ExtractedMetadata:
+        nonlocal scanned
         if path is None:
             return ExtractedMetadata()
-        metadata, _document = await extract_from_pdf(
+        metadata, document = await extract_from_pdf(
             path, instance=instance, settings=settings, force_local=force_local
         )
+        scanned = document.probably_scanned
         return metadata
 
     registry, extracted = await asyncio.gather(_registry(), _pdf())
@@ -117,6 +126,7 @@ async def run_extraction(
         mapped=map_metadata(metadata, profile),
         registry_notice=registry_notice,
         registry_used=not registry.is_empty(),
+        scanned=scanned,
     )
 
 
@@ -148,6 +158,11 @@ class ExtractionJob:
     def registry_notice(self) -> str | None:
         """What to say about the identifier, when there is something to say."""
         return self.result.registry_notice if self.result else None
+
+    @property
+    def scanned(self) -> bool:
+        """True when the PDF turned out to be images of a document (§13.4)."""
+        return bool(self.result and self.result.scanned)
 
     @property
     def elapsed(self) -> float:

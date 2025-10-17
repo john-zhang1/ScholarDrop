@@ -42,6 +42,22 @@
 
 <div class="actions">
   <a class="button" href="/browse">Submit another</a>
+  {# Same collection, same shared context, none of this work's own details
+     (DESIGN.md §13.4). A POST because it creates a draft in the repository, and
+     the fields it will carry are named so nobody is surprised by a pre-filled
+     form. #}
+  {% if seeded_fields %}
+  <form method="post" action="/submit/like">
+    <button class="button quiet-button" type="submit">Submit another like this</button>
+  </form>
+  {% endif %}
   <a class="quiet" href="/my-submissions">Where is my item?</a>
 </div>
+
+{% if seeded_fields %}
+<p class="quiet">
+  “Submit another like this” starts a new draft in {{ collection_name or 'this collection' }},
+  carrying {{ seeded_fields | join(', ') }} — not the title, the authors, or the file.
+</p>
+{% endif %}
 {% endblock %}

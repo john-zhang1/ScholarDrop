@@ -687,6 +687,26 @@ class DSpaceClient:
         """Every option of a controlled vocabulary, for a dropdown's <select>."""
         return await self._walk(self.vocabulary_entries, name, size=size)
 
+    async def vocabulary_matches(
+        self, name: str, filter: str, size: int = 10
+    ) -> list[VocabularyEntry]:
+        """Entries of a controlled vocabulary matching what somebody is typing.
+
+        The *filtered* form of the same endpoint, and the only one that answers
+        for a vocabulary backed by a controlled-vocabulary XML file: those are
+        "not scrollable" (`ChoiceAuthority.isScrollable` defaults to false), and
+        `VocabularyEntryLinkRepository` answers 422 to a plain listing of one
+        while serving `?filter=` happily. That is why the fields bound to srsc,
+        subjects, ougroup and commontypes on this VM have no options to list --
+        and why they can still be searched.
+        """
+        payload = await self._json(
+            "GET",
+            f"/submission/vocabularies/{name}/entries",
+            params={"filter": filter, "page": 0, "size": size},
+        )
+        return parse_page(payload, "entries", VocabularyEntry.from_payload).items
+
     # ---- plumbing ----------------------------------------------------------
 
     async def _walk(self, method: Any, *args: Any, size: int) -> list[Any]:

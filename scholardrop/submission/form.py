@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from scholardrop.dspace.models import ValidationIssue, VocabularyEntry, WorkspaceItem
+from scholardrop.extract.language import LANGUAGE_NAMES
 from scholardrop.extract.mapper import MappedMetadata
 from scholardrop.extract.models import TIER_LABELS, SourceTier
 
@@ -34,6 +35,8 @@ FORM_SECTION = "submission-form"
 # `::` already separates section from field, so a third segment cannot collide
 # with a metadata field name.
 ORCID_SUFFIX = "::orcid"
+# The same trick again, for the language a parallel value is written in (§13.4).
+LANG_SUFFIX = "::lang"
 UPLOAD_SECTION = "upload"
 LICENSE_SECTION = "license"
 COLLECTION_SECTION = "collection"
@@ -154,6 +157,11 @@ class FormValue:
     # An ORCID iD chosen for this value (DESIGN.md §13.2), carried through the
     # form whether or not the instance stores it anywhere.
     orcid: str = ""
+    # The language *this value* is in (DESIGN.md §13.4), which is what makes two
+    # rows of one field a work's title and its translation rather than a mistake.
+    # Empty means the repository's default language, which is what an ordinary
+    # single-language submission wants.
+    language: str = ""
 
     @property
     def provenance(self) -> str:
@@ -171,6 +179,12 @@ class FormField:
     # True where this field holds a person and the instance offers the ORCID
     # type-ahead for it (DESIGN.md §13.2).
     orcid_lookup: bool = False
+    # True where this field is bound to a controlled vocabulary that could not be
+    # listed, so the box searches it instead of accepting anything (§13.4).
+    vocabulary_lookup: bool = False
+    # True where this field holds the work's own words, so each value can state
+    # which language it is in and the field can gain a translation (§13.4).
+    translatable: bool = False
 
     @property
     def name(self) -> str:
@@ -223,6 +237,16 @@ class FormField:
     def orcid_name(self) -> str:
         """The hidden input carrying this row's iD, parsed by `patch.parse_rows`."""
         return f"{self.name}{ORCID_SUFFIX}"
+
+    @property
+    def lang_name(self) -> str:
+        """The input carrying this row's language, parsed the same way."""
+        return f"{self.name}{LANG_SUFFIX}"
+
+    @property
+    def language_options(self) -> list[tuple[str, str]]:
+        """(code, name) pairs for the translation picker, in name order."""
+        return sorted(LANGUAGE_NAMES.items(), key=lambda pair: pair[1])
 
     def rows(self) -> list[FormValue]:
         """Always at least one row, so an empty field is still editable."""
@@ -382,24 +406,33 @@ def _guess_type(section_id: str) -> str:
     return FORM_SECTION
 
 
-def _values_of(section_data: Any, metadata_field: str) -> list[tuple[str, str]]:
-    """Stored values of one metadata field, each with its authority key.
+def _values_of(section_data: Any, metadata_field: str) -> list[tuple[str, str, str]]:
+    """Stored values of one metadata field, each with its authority and language.
 
-    `[{"value": ..., "authority": ...}, ...]` -> `[(value, authority)]`. The
-    authority is carried so a draft resumed on an ORCID-authority instance shows
-    the iD it already holds instead of looking as though nobody chose one.
+    `[{"value": ..., "authority": ..., "language": ...}, ...]` ->
+    `[(value, authority, language)]`. Both keys are carried for the same reason:
+    a draft resumed on an ORCID-authority instance must show the iD it already
+    holds, and a resumed bilingual draft must show which of its two titles is the
+    translation -- otherwise re-depositing it flattens both into the default
+    language, silently.
     """
     if not isinstance(section_data, dict):
         return []
     entries = section_data.get(metadata_field) or []
     if not isinstance(entries, list):
         return []
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, str]] = []
     for entry in entries:
         if isinstance(entry, dict) and entry.get("value"):
-            out.append((str(entry["value"]), str(entry.get("authority") or "")))
+            out.append(
+                (
+                    str(entry["value"]),
+                    str(entry.get("authority") or ""),
+                    str(entry.get("language") or ""),
+                )
+            )
         elif isinstance(entry, str) and entry:
-            out.append((entry, ""))
+            out.append((entry, "", ""))
     return out
 
 
@@ -420,8 +453,11 @@ def build_form(
     vocabularies: dict[str, list[VocabularyEntry]] | None = None,
     submitted: dict[tuple[str, str], list[str]] | None = None,
     submitted_orcids: dict[tuple[str, str], list[str]] | None = None,
+    submitted_languages: dict[tuple[str, str], list[str]] | None = None,
     extra_errors: dict[str, list[str]] | None = None,
     orcid_policy: Any = None,
+    vocabulary_typeahead: bool = False,
+    translatable_fields: frozenset[str] = frozenset(),
 ) -> SubmissionForm:
     """Assemble the review form.
 
@@ -454,19 +490,28 @@ def build_form(
             data = item.sections.get(section_id)
             for config in parse_fields(form_configs.get(section_id) or {}):
                 values = [
-                    FormValue(value=value, orcid=authority)
-                    for value, authority in _values_of(data, config.metadata_field)
+                    FormValue(value=value, orcid=authority, language=language)
+                    for value, authority, language in _values_of(data, config.metadata_field)
                 ]
+                options = vocabularies.get(config.vocabulary or "", [])
+                orcid = bool(orcid_policy and orcid_policy.offers_lookup(config.metadata_field))
                 section.fields.append(
                     FormField(
                         config=config,
                         section_id=section_id,
                         values=values,
                         errors=errors.get(f"{section_id}/{config.metadata_field}", []),
-                        options=vocabularies.get(config.vocabulary or "", []),
-                        orcid_lookup=bool(
-                            orcid_policy and orcid_policy.offers_lookup(config.metadata_field)
+                        options=options,
+                        orcid_lookup=orcid,
+                        # Only where the options could not be listed: a vocabulary
+                        # that *did* answer is already a <select>, which is better
+                        # than a search box. And never on a field that already has
+                        # the ORCID type-ahead -- one input can carry one hx-get,
+                        # and a person's name is not a vocabulary term.
+                        vocabulary_lookup=bool(
+                            vocabulary_typeahead and config.vocabulary and not options and not orcid
                         ),
+                        translatable=config.metadata_field in translatable_fields,
                     )
                 )
         form.sections.append(section)
@@ -474,7 +519,7 @@ def build_form(
     if mapped is not None:
         _apply_prefill(form, mapped)
     if submitted is not None:
-        _apply_submitted(form, submitted, submitted_orcids or {})
+        _apply_submitted(form, submitted, submitted_orcids or {}, submitted_languages or {})
     if extra_errors:
         _apply_errors(form, extra_errors)
     return form
@@ -484,15 +529,17 @@ def _apply_submitted(
     form: SubmissionForm,
     submitted: dict[tuple[str, str], list[str]],
     orcids: dict[tuple[str, str], list[str]] | None = None,
+    languages: dict[tuple[str, str], list[str]] | None = None,
 ) -> None:
     """Re-render with what the user just typed, not with what DSpace stores.
 
     Used when the form comes back -- the confirm step, a validation failure, or
     "back to editing" -- so an edit is never silently lost between requests. The
-    chosen iDs travel with their values, or picking one and then hitting a
-    validation error would quietly discard it.
+    chosen iDs and the chosen languages travel with their values, or picking one
+    and then hitting a validation error would quietly discard it.
     """
     orcids = orcids or {}
+    languages = languages or {}
     for section in form.editable_sections:
         for field_ in section.fields:
             key = (section.id, field_.config.metadata_field)
@@ -500,8 +547,13 @@ def _apply_submitted(
             if values is None:
                 continue
             chosen = orcids.get(key) or []
+            tagged = languages.get(key) or []
             field_.values = [
-                FormValue(value=v, orcid=chosen[i] if i < len(chosen) else "")
+                FormValue(
+                    value=v,
+                    orcid=chosen[i] if i < len(chosen) else "",
+                    language=tagged[i] if i < len(tagged) else "",
+                )
                 for i, v in enumerate(values)
             ]
 

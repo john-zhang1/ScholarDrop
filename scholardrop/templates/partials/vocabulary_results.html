@@ -1,0 +1,43 @@
+{# Controlled-vocabulary suggestions for one row (DESIGN.md §13.4).
+
+   Built exactly like the ORCID list, and for the same three reasons: buttons
+   because choosing one changes this page and navigates nowhere; a real list with
+   a heading so a screen reader is told what it has reached and how many there
+   are; and the value in a `data-` attribute rather than interpolated into the
+   handler, so the script stays a fixed string that no term with a quote in it
+   can break.
+
+   The value is what gets deposited and the display is what a person reads --
+   they differ in a hierarchical vocabulary, where the display carries the whole
+   branch ("Humanities::History::Modern"). Both are shown, and the value is what
+   the box is filled with. #}
+{% if entries %}
+<div class="vocabulary-results" role="group" aria-label="Vocabulary matches for {{ query }}">
+  <p class="quiet vocabulary-heading" id="vocabulary-heading-{{ field }}">
+    {{ entries | length }} match{{ '' if entries | length == 1 else 'es' }} in this field's
+    controlled list — choose one, or carry on typing
+  </p>
+  <ul class="plain" aria-labelledby="vocabulary-heading-{{ field }}">
+    {% for entry in entries %}
+    <li>
+      <button type="button" class="link-button vocabulary-choice"
+              data-value="{{ entry.value }}"
+              hx-on:click="const row = this.closest('.field-row');
+                row.querySelector('.value-input').value = this.dataset.value;
+                row.querySelector('.vocabulary-suggestions').innerHTML = '';">
+        <strong>{{ entry.value }}</strong>
+        {% if entry.display and entry.display != entry.value %}
+        <span class="quiet"> · {{ entry.display }}</span>
+        {% endif %}
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% elif query and query | length >= min_length %}
+<p class="quiet vocabulary-none" role="status">
+  Nothing in this field's controlled list matches “{{ query }}”.
+  {% if unavailable %}The repository could not be asked just now — {% endif %}
+  Typing a value is still allowed.
+</p>
+{% endif %}

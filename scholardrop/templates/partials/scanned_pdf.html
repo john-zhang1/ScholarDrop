@@ -1,0 +1,35 @@
+{# The scanned-PDF warning (DESIGN.md §13.4). Swapped into #upload-panel in place
+   of the progress state, for the same reason the duplicate warning is: that
+   panel's next poll answers HX-Redirect to /review and would carry this away
+   before it was read.
+
+   It stops the flow for one click and no more. A scanned thesis is a real
+   submission -- the repository is full of digitised material -- and the point is
+   that the submitter knows what they are depositing, not that they are talked
+   out of it. #}
+<div class="notice notice-missing" role="alert">
+  <p>
+    <strong>{{ filename or 'That PDF' }} has no text layer.</strong>
+    It is a scan — images of pages rather than text — so nothing could be read out
+    of it, and the deposited item will not be full-text searchable.
+  </p>
+  <p class="quiet">
+    The form on the next page is the collection's form, empty: you can fill it in
+    and deposit as usual. If you have a text-bearing version of this document (one
+    exported from a word processor, or one that has been through OCR), depositing
+    that instead makes the item findable by its contents.
+  </p>
+</div>
+
+<div class="actions">
+  <form method="post" action="/submit/{{ wsi_id }}/continue?warning=scan"
+        hx-post="/submit/{{ wsi_id }}/continue?warning=scan">
+    <button class="button" type="submit">Continue to the form</button>
+  </form>
+  <form method="post" action="/submit/{{ wsi_id }}/cancel"
+        hx-post="/submit/{{ wsi_id }}/cancel"
+        hx-target="#upload-panel" hx-swap="innerHTML">
+    <button class="button danger" type="submit"
+            aria-label="Discard draft {{ wsi_id }} and choose another file">Discard and choose another file</button>
+  </form>
+</div>

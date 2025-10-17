@@ -65,6 +65,15 @@
             The obvious `hx-vals="js:{q: event.target.value}"` does *not* work:
             htmx 2.0.4 evaluates hx-vals with no `event` in scope, and the only
             symptom is a console error and a request that never happens. #}
+         {% elif field.vocabulary_lookup %}
+         {# The same mechanism against the repository's own vocabulary
+            (DESIGN.md §13.4). This field is bound to one DSpace would not list,
+            so the box searches it rather than accepting anything at all. #}
+         autocomplete="off"
+         hx-get="/review/{{ draft_id }}/vocabulary?vocabulary={{ field.config.vocabulary | urlencode }}&amp;field={{ field.dom_id | urlencode }}&amp;name={{ field.name | urlencode }}"
+         hx-trigger="keyup changed delay:400ms"
+         hx-target="next .vocabulary-suggestions"
+         hx-swap="innerHTML"
          {% endif %}>
   {% endif %}
 
@@ -87,6 +96,28 @@
   <input type="hidden" class="orcid-input" name="{{ field.orcid_name }}" value="{{ value.orcid }}">
   <span class="badge orcid-chosen" aria-live="polite">{{ value.orcid }}</span>
   <div class="orcid-suggestions"></div>
+  {% endif %}
+
+  {# Where the suggestions land, and the only signal on the page that this box is
+     not free text after all. #}
+  {% if field.vocabulary_lookup %}
+  <div class="vocabulary-suggestions"></div>
+  {% endif %}
+
+  {# Which language *this value* is in (DESIGN.md §13.4). Rendered on every row of
+     a translatable field, not only on added ones: a work whose title is Chinese
+     and whose translation is English needs to say so about the first row too, and
+     the empty option means "the repository's default", which is what an ordinary
+     submission leaves it at. It sits immediately after the value, because
+     `patch.parse_rows` pairs the two by document order. #}
+  {% if field.translatable %}
+  <select class="row-language" name="{{ field.lang_name }}"
+          aria-label="Language of this {{ label | lower }}{{ ', value ' ~ (row_index + 1) if row_index else '' }}">
+    <option value="">— language: repository default —</option>
+    {% for code, name in field.language_options %}
+    <option value="{{ code }}"{% if code == value.language %} selected{% endif %}>{{ name }}</option>
+    {% endfor %}
+  </select>
   {% endif %}
 
   {% if field.config.repeatable %}

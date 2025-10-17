@@ -148,6 +148,17 @@ VOCABULARIES = {
     ]
 }
 
+# What `?filter=` answers with. `srsc` is the shipped hierarchical vocabulary this
+# VM actually binds to dc.subject, and its display carries the whole branch --
+# which is why the suggestion list shows value and display separately.
+SEARCHABLE_VOCABULARIES = {
+    "srsc": [
+        VocabularyEntry(value="Linguistics", display="Humanities::Linguistics"),
+        VocabularyEntry(value="Computational linguistics", display="Humanities::Linguistics::CL"),
+        VocabularyEntry(value="Chemistry", display="Natural sciences::Chemistry"),
+    ]
+}
+
 
 def _definition_section(section_id: str, section_type: str, header: str | None = None) -> dict:
     panel: dict[str, Any] = {
@@ -283,6 +294,9 @@ class FakeExtractor:
         self.error: Exception | None = None
         self.gate: asyncio.Event | None = None
         self.registry_notice: str | None = None
+        # What the reader would have said about the file (phase 11): pages, but no
+        # text layer worth the name.
+        self.scanned = False
         self.calls: list[Any] = []
 
     def __call__(self, path: Any = None, **kwargs: Any) -> Any:
@@ -305,6 +319,7 @@ class FakeExtractor:
             mapped=map_metadata(self.metadata, profile),
             registry_notice=self.registry_notice,
             registry_used=self.metadata.tier_used == SourceTier.REGISTRY,
+            scanned=self.scanned,
         )
 
 
@@ -335,6 +350,11 @@ class FakeDSpaceClient:
         self.definition: dict[str, Any] = TRADITIONAL_DEFINITION
         self.submission_forms: dict[str, dict[str, Any]] = dict(SUBMISSION_FORMS)
         self.vocabularies: dict[str, list[VocabularyEntry]] = dict(VOCABULARIES)
+        # Vocabularies that can only be *searched* (phase 11): every DSpace
+        # vocabulary backed by an XML file is one of these.
+        self.searchable_vocabularies: dict[str, list[VocabularyEntry]] = dict(
+            SEARCHABLE_VOCABULARIES
+        )
         self.deleted: list[str] = []
 
         # Deposit (phase 5)
@@ -563,6 +583,20 @@ class FakeDSpaceClient:
     async def all_vocabulary_entries(self, name: str, size: int = 100) -> list[VocabularyEntry]:
         self._record("all_vocabulary_entries", name)
         return self.vocabularies.get(name, [])
+
+    async def vocabulary_matches(
+        self, name: str, filter: str, size: int = 10
+    ) -> list[VocabularyEntry]:
+        """Filtered search (phase 11). Keyed separately from the listable ones.
+
+        A real vocabulary backed by a controlled-vocabulary XML file answers 422
+        to a plain listing and serves this call, so a fake that answered both
+        from one dict could not tell the two apart.
+        """
+        self._record("vocabulary_matches", name, filter=filter, size=size)
+        entries = self.searchable_vocabularies.get(name, [])
+        matched = [e for e in entries if filter.lower() in f"{e.value} {e.display}".lower()]
+        return matched[:size]
 
     # -- deposit (phase 5) -------------------------------------------------
 

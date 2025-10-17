@@ -27,7 +27,8 @@ from pathlib import Path
 from scholardrop.config import Instance
 from scholardrop.extract import heuristic, llm
 from scholardrop.extract.backends import LLMBackend, LlmUnavailable, select_backend
-from scholardrop.extract.models import ExtractedMetadata, SourceTier
+from scholardrop.extract.language import detect_language
+from scholardrop.extract.models import ExtractedMetadata, SourceTier, text
 from scholardrop.extract.reader import PdfDocument, read_pdf
 from scholardrop.settings import Settings
 
@@ -55,6 +56,39 @@ async def extract_from_pdf(
 
 
 async def extract_from_document(
+    document: PdfDocument,
+    *,
+    instance: Instance,
+    settings: Settings,
+    client: object | None = None,
+    force_local: bool = False,
+) -> ExtractedMetadata:
+    metadata = await _extract(
+        document, instance=instance, settings=settings, client=client, force_local=force_local
+    )
+    return _with_language(metadata, document, settings)
+
+
+def _with_language(
+    metadata: ExtractedMetadata, document: PdfDocument, settings: Settings
+) -> ExtractedMetadata:
+    """Fill in the document's language when nothing else did (DESIGN.md §13.4).
+
+    Only ever fills a gap: a model that read the language off the document, and a
+    registry record that carries it, both know more than a word count does. The
+    value is tier 2 and flagged as such -- a detected language is a guess, and one
+    the person depositing can correct in a dropdown.
+    """
+    if not settings.bilingual_enabled or metadata.language.present:
+        return metadata
+    code, confidence = detect_language(document.text_for_llm)
+    if not code:
+        return metadata
+    log.info("detected document language %s", code)
+    return metadata.model_copy(update={"language": text(code, confidence, SourceTier.HEURISTIC)})
+
+
+async def _extract(
     document: PdfDocument,
     *,
     instance: Instance,
