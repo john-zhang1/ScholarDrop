@@ -160,6 +160,35 @@ SEARCHABLE_VOCABULARIES = {
 }
 
 
+# What /config/submissionuploads/upload answers with, trimmed from the four
+# conditions this VM's access-conditions.xml configures. The date rules are the
+# real ones: an embargo *requires* a start date (when the file becomes readable),
+# a lease *requires* an end date (when it stops being), and neither may carry the
+# other's.
+UPLOAD_CONFIG = {
+    "id": "upload",
+    "name": "upload",
+    "required": True,
+    "maxSize": 536870912,
+    "accessConditionOptions": [
+        {"name": "openaccess", "hasStartDate": False, "hasEndDate": False},
+        {
+            "name": "lease",
+            "hasStartDate": False,
+            "hasEndDate": True,
+            "maxEndDate": "2027-01-30",
+        },
+        {
+            "name": "embargo",
+            "hasStartDate": True,
+            "hasEndDate": False,
+            "maxStartDate": "2029-07-30",
+        },
+        {"name": "administrator", "hasStartDate": False, "hasEndDate": False},
+    ],
+}
+
+
 def _definition_section(section_id: str, section_type: str, header: str | None = None) -> dict:
     panel: dict[str, Any] = {
         "id": section_id,
@@ -171,6 +200,11 @@ def _definition_section(section_id: str, section_type: str, header: str | None =
         panel["header"] = header
     if section_type == "submission-form":
         panel["_links"]["config"] = {"href": f"{API}/config/submissionforms/{section_id}"}
+    if section_type == "upload":
+        # An upload panel links to its own configuration the same way
+        # (SubmissionUploadRest's link on the panel is called `config` too), and
+        # that is where the access conditions live (DESIGN.md §13.5).
+        panel["_links"]["config"] = {"href": f"{API}/config/submissionuploads/{section_id}"}
     return panel
 
 
@@ -349,6 +383,10 @@ class FakeDSpaceClient:
         self.next_workspaceitem_id = "42"
         self.definition: dict[str, Any] = TRADITIONAL_DEFINITION
         self.submission_forms: dict[str, dict[str, Any]] = dict(SUBMISSION_FORMS)
+        # The upload step's own configuration, which carries the access
+        # conditions this collection offers (phase 12). `{}` is a collection
+        # that offers none -- the "no options, no picker" case.
+        self.upload_config: dict[str, Any] = dict(UPLOAD_CONFIG)
         self.vocabularies: dict[str, list[VocabularyEntry]] = dict(VOCABULARIES)
         # Vocabularies that can only be *searched* (phase 11): every DSpace
         # vocabulary backed by an XML file is one of these.
@@ -573,6 +611,11 @@ class FakeDSpaceClient:
     async def submission_definition(self, name: str) -> dict[str, Any]:
         self._record("submission_definition", str(name).rstrip("/").rsplit("/", 1)[-1])
         return self.definition
+
+    async def submission_upload(self, name: str) -> dict[str, Any]:
+        key = str(name).rstrip("/").rsplit("/", 1)[-1]
+        self._record("submission_upload", key)
+        return self.upload_config
 
     async def submission_form(self, name: str) -> dict[str, Any]:
         # Routes pass the config href from the definition; key on its last segment.

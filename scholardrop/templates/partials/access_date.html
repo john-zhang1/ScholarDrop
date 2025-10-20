@@ -1,0 +1,25 @@
+{# The date box belonging to one access condition (DESIGN.md §13.5).
+
+   Swapped in by /review/{id}/access when the picker above it changes, because
+   *which* date is being asked for depends on the condition: a start date is when
+   the file becomes readable, an end date is when it stops being. One box that
+   said "date" for both would be wrong half the time.
+
+   `max` is the repository's own limit, already resolved to a real date by
+   `SubmissionUploadRestRepository` (+36 months for an embargo on this VM). It is
+   a real constraint the browser enforces; the same check runs again at deposit,
+   because the browser is not the authority on anything here.
+
+   Expects `option`, `index`, and `chosen`. An option that takes no date renders
+   nothing at all -- which is how choosing "open access" clears the box. #}
+{% if option and option.needs_date %}
+<label class="access-date-label" for="access-date-{{ index }}">{{ option.date_label }}</label>
+<input type="date" id="access-date-{{ index }}" name="{{ date_name }}"
+       value="{{ chosen or '' }}"
+       {% if option.max_date %}max="{{ option.max_date }}"{% endif %}
+       aria-required="true"
+       aria-describedby="access-limit-{{ index }}">
+<span class="quiet" id="access-limit-{{ index }}">
+  {% if option.max_date %}No later than {{ option.max_date }}.{% else %}A date this repository accepts.{% endif %}
+</span>
+{% endif %}

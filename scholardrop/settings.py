@@ -166,6 +166,13 @@ class Settings(BaseSettings):
     # values on the fields that carry a work's own words.
     bilingual_enabled: bool = True
 
+    # Access conditions per uploaded file (DESIGN.md §13.5). What is on offer is
+    # the collection's own upload configuration -- a collection that configures
+    # none gets no picker, and this flag switches the whole thing off, including
+    # the extra configuration read. Off means every deposit takes whatever access
+    # the repository applies by default, which is what happened before this.
+    access_conditions_enabled: bool = True
+
     # The submission status page (DESIGN.md §13.3). Off means no deposit is
     # logged and /my-submissions lists only what DSpace itself knows -- the
     # drafts. Worth having: the log is the one piece of state this app keeps

@@ -39,17 +39,31 @@ from scholardrop.routes.deps import (
     require_session,
     session_instance,
 )
+from scholardrop.submission.access import (
+    build_operations as access_operations,
+)
+from scholardrop.submission.access import (
+    describe_choices,
+    input_name,
+    parse_choices,
+    parse_options,
+    rows_for,
+    validate_choices,
+)
 from scholardrop.submission.defaults import carry_over
 from scholardrop.submission.definition import (
     config_hrefs,
     load_form_configs,
     load_sections,
+    load_upload_config,
     load_vocabularies,
+    upload_section,
 )
 from scholardrop.submission.drafts import first_value
 from scholardrop.submission.form import (
     FormField,
     FormValue,
+    UploadedFile,
     build_form,
     message_for,
     parse_fields,
@@ -89,29 +103,69 @@ class _Configuration:
     """The live configuration one request needs, fetched once."""
 
     def __init__(
-        self, item: Any, sections: list[dict[str, Any]], configs: dict, vocabularies: dict
+        self,
+        item: Any,
+        sections: list[dict[str, Any]],
+        configs: dict,
+        vocabularies: dict,
+        upload_section_id: str = "",
+        access_options: list[Any] | None = None,
     ):
         self.item = item
         self.sections = sections
         self.configs = configs
         self.vocabularies = vocabularies
+        # DESIGN.md §13.5. The section id is read from the definition because the
+        # patch path names it, and a definition may call its upload step anything.
+        self.upload_section_id = upload_section_id
+        self.access_options = access_options or []
 
     @property
     def allowed(self) -> dict[tuple[str, str], Any]:
         return field_index(self.sections, self.configs)
 
 
-async def _load(client: Any, wsi_id: str, *, cache: Any, instance_key: str) -> _Configuration:
+async def _load(
+    client: Any, wsi_id: str, *, cache: Any, instance_key: str, access: bool = False
+) -> _Configuration:
     item = await client.get_workspaceitem(wsi_id)
     sections = await load_sections(client, item, cache=cache, instance_key=instance_key)
     configs = await load_form_configs(client, sections, cache=cache, instance_key=instance_key)
     vocabularies = await load_vocabularies(client, configs, cache=cache, instance_key=instance_key)
-    return _Configuration(item, sections, configs, vocabularies)
+    section_id, options = "", []
+    if access:
+        # One extra read per instance, cached with the rest of the repository's
+        # configuration; skipped entirely when the slice is switched off.
+        section_id, _href = upload_section(sections)
+        options = parse_options(
+            await load_upload_config(client, sections, cache=cache, instance_key=instance_key)
+        )
+    return _Configuration(item, sections, configs, vocabularies, section_id, options)
 
 
 def _typeahead(request: Request) -> bool:
     """Whether a vocabulary-bound field searches its vocabulary (DESIGN.md §13.4)."""
     return bool(request.app.state.settings.vocabulary_typeahead_enabled)
+
+
+def _access(request: Request) -> bool:
+    """Whether a file may be given an access condition here (DESIGN.md §13.5)."""
+    return bool(request.app.state.settings.access_conditions_enabled)
+
+
+def _uploaded_files(item: Any, upload_section_id: str) -> list[UploadedFile]:
+    """The draft's files, in the order the access-condition patch path counts them.
+
+    That path names a file by its *position*, so the list is read from the item
+    the deposit is about to patch rather than from the page that was rendered —
+    which is what keeps a stale form from putting a policy on a file that is not
+    there, or, after a re-upload, on a different one.
+    """
+    section = item.sections.get(upload_section_id) if upload_section_id else None
+    files = (section or {}).get("files") if isinstance(section, dict) else None
+    if not isinstance(files, list):
+        return []
+    return [UploadedFile.from_payload(f) for f in files if isinstance(f, dict)]
 
 
 def _translatable(request: Request, instance: Any) -> frozenset[str]:
@@ -147,7 +201,9 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
     mapped = job.mapped if job and job.state == "done" else None
 
     async with dspace_client(request, session) as client:
-        live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
+        live = await _load(
+            client, wsi_id, cache=cache, instance_key=instance.key, access=_access(request)
+        )
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
         policy = _orcid_policy(request, instance, live)
         form = build_form(
@@ -190,6 +246,9 @@ async def review(request: Request, wsi_id: DraftId) -> HTMLResponse:
         # on the progress screen: without JavaScript the upload lands here directly.
         scanned=bool(job and job.scanned and request.app.state.settings.scanned_warning_enabled),
         orcid_policy=policy,
+        # One picker per uploaded file, or nothing at all where the collection
+        # configures no access conditions (DESIGN.md §13.5).
+        access_rows=rows_for(form.upload_files, live.access_options),
     )
 
 
@@ -202,7 +261,9 @@ async def edit(request: Request, wsi_id: DraftId) -> HTMLResponse:
     posted = list((await request.form()).multi_items())
 
     async with dspace_client(request, session) as client:
-        live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
+        live = await _load(
+            client, wsi_id, cache=cache, instance_key=instance.key, access=_access(request)
+        )
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
 
     policy = _orcid_policy(request, instance, live)
@@ -227,6 +288,9 @@ async def edit(request: Request, wsi_id: DraftId) -> HTMLResponse:
         filename=session.submission(wsi_id).get("filename"),
         license_checked=license_granted(posted),
         orcid_policy=policy,
+        # The access choices come back with everything else, or "back to editing"
+        # would quietly reset them to the collection's default (DESIGN.md §13.5).
+        access_rows=rows_for(form.upload_files, live.access_options, choices=parse_choices(posted)),
     )
 
 
@@ -243,7 +307,9 @@ async def confirm(request: Request, wsi_id: DraftId) -> HTMLResponse:
     posted = list((await request.form()).multi_items())
 
     async with dspace_client(request, session) as client:
-        live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
+        live = await _load(
+            client, wsi_id, cache=cache, instance_key=instance.key, access=_access(request)
+        )
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
         collection = await _collection_name(
             client, live.item, cache=cache, instance_key=instance.key
@@ -272,6 +338,9 @@ async def confirm(request: Request, wsi_id: DraftId) -> HTMLResponse:
         license_checked=license_granted(posted),
         collection_name=collection,
         filename=session.submission(wsi_id).get("filename"),
+        # Carried as hidden inputs and stated in words: this page is the last
+        # look at what will be sent, and access is part of that (DESIGN.md §13.5).
+        access_rows=rows_for(form.upload_files, live.access_options, choices=parse_choices(posted)),
     )
 
 
@@ -285,7 +354,9 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
     granted = license_granted(posted)
 
     async with dspace_client(request, session) as client:
-        live = await _load(client, wsi_id, cache=cache, instance_key=instance.key)
+        live = await _load(
+            client, wsi_id, cache=cache, instance_key=instance.key, access=_access(request)
+        )
         licence = await _licence_text(client, live.item, cache=cache, instance_key=instance.key)
         collection = await _collection_name(
             client, live.item, cache=cache, instance_key=instance.key
@@ -294,8 +365,14 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         submitted = parse_submission(posted, live.allowed)
         orcids = parse_orcids(posted, live.allowed)
         languages = parse_languages(posted, live.allowed)
+        access = parse_choices(posted)
 
-        def back(message: str, errors: dict[str, list[str]], status: int) -> HTMLResponse:
+        def back(
+            message: str,
+            errors: dict[str, list[str]],
+            status: int,
+            access_problems: dict[int, str] | None = None,
+        ) -> HTMLResponse:
             form = build_form(
                 live.item,
                 live.configs,
@@ -318,6 +395,12 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
                 license_checked=granted,
                 deposit_error=message,
                 orcid_policy=policy,
+                access_rows=rows_for(
+                    form.upload_files,
+                    live.access_options,
+                    choices=access,
+                    problems=access_problems,
+                ),
             )
             response.status_code = status
             return response
@@ -329,6 +412,19 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
                 400,
             )
 
+        # Checked before anything is written, and with the repository's own rules
+        # (DESIGN.md §13.5): an embargo with no date, or one beyond the configured
+        # limit, is a sentence beside the file rather than a 422 at the end.
+        access_problems = validate_choices(access, live.access_options)
+        if access_problems:
+            log.info("workspaceitem %s has an unusable access condition", wsi_id)
+            return back(
+                "The access condition on one of these files cannot be applied as it stands.",
+                {},
+                400,
+                access_problems,
+            )
+
         operations = build_operations(
             live.item,
             submitted,
@@ -336,6 +432,19 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
             orcids=orcids,
             languages=languages,
             policy=policy,
+        )
+        # After the metadata, because a file's policies are only worth setting on
+        # a draft the repository is going to accept -- and one patch request
+        # carries both.
+        deposited_files = _uploaded_files(live.item, live.upload_section_id)
+        deposited_names = {i: f.name for i, f in enumerate(deposited_files)}
+        operations.extend(
+            access_operations(
+                live.upload_section_id,
+                access,
+                live.access_options,
+                file_count=len(deposited_files),
+            )
         )
         try:
             patched = await client.patch_sections(wsi_id, operations)
@@ -439,6 +548,13 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         # What "submit another like this" would carry over, so the offer can say
         # so rather than springing a pre-filled form on somebody (DESIGN.md §13.4).
         seeded_fields=seeded,
+        # And what was asked of each file (DESIGN.md §13.5). Named from the values
+        # sent, because the item is not read back after a deposit that entered a
+        # workflow -- and the answer to "is it embargoed?" must not depend on that.
+        access_applied=[
+            (deposited_names.get(index, ""), description)
+            for index, description in sorted(describe_choices(access, live.access_options).items())
+        ],
     )
 
 
@@ -557,6 +673,51 @@ async def vocabulary_suggestions(
         query=typed,
         unavailable=unavailable,
         min_length=settings.vocabulary_min_query_length,
+    )
+
+
+@router.get("/review/{wsi_id}/access", response_class=HTMLResponse)
+async def access_date(
+    request: Request,
+    wsi_id: DraftId,
+    index: int = Query(0, ge=0),
+    name: str = Query(""),
+    option: str = Query(""),
+) -> HTMLResponse:
+    """The date box belonging to the access condition just picked (§13.5).
+
+    Which date a condition takes -- a start date, an end date, or none -- is the
+    repository's configuration, so the box is re-rendered from it rather than
+    shown or hidden by script. An option that takes no date renders nothing,
+    which is how choosing open access clears the box.
+
+    The options are read from this draft's own upload configuration (cached),
+    not from the query string: unlike a vocabulary name, this decides what the
+    form will ask somebody to promise about access.
+    """
+    session = require_session(request)
+    instance = session_instance(request, session)
+    if not _access(request):
+        return HTMLResponse("")
+
+    chosen = option or (request.query_params.get(name, "") if name else "")
+    async with dspace_client(request, session) as client:
+        live = await _load(
+            client,
+            wsi_id,
+            cache=request.app.state.form_configs,
+            instance_key=instance.key,
+            access=True,
+        )
+
+    selected = next((o for o in live.access_options if o.name == chosen), None)
+    return render(
+        request,
+        "partials/access_date.html",
+        option=selected,
+        index=index,
+        chosen="",
+        date_name=input_name(index, date_input=True),
     )
 
 

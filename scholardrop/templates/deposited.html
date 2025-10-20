@@ -40,6 +40,24 @@
   was changed.
 </p>
 
+{# What the repository was asked to apply to each file (DESIGN.md §13.5). Stated
+   here as well as on the confirm page, because "is my thesis embargoed?" is
+   asked after the deposit, not before it. #}
+{% if access_applied %}
+<div class="notice" role="status">
+  <p><strong>Access:</strong></p>
+  <ul class="plain">
+    {% for name, condition in access_applied %}
+    <li>{{ name or 'The file' }} — {{ condition }}</li>
+    {% endfor %}
+  </ul>
+  <p class="quiet">
+    An embargo is enforced by the repository on the file itself, not by this app.
+    Check the item to see it applied; ask repository staff to change it later.
+  </p>
+</div>
+{% endif %}
+
 <div class="actions">
   <a class="button" href="/browse">Submit another</a>
   {# Same collection, same shared context, none of this work's own details

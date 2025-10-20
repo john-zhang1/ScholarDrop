@@ -673,6 +673,24 @@ class DSpaceClient:
         )
         return await self._json("GET", url)
 
+    async def submission_upload(self, name: str) -> dict[str, Any]:
+        """The upload step's own configuration: file limits and access conditions.
+
+        An `upload` panel links to this the same way a `submission-form` panel
+        links to its field configuration -- `SubmissionUploadRest`'s link on the
+        panel is called `config` too -- so this takes a name or that href.
+
+        Returned raw: `submission.access` understands the shape. Requires
+        authentication (`@PreAuthorize("hasAuthority('AUTHENTICATED')")`), which
+        every caller here has.
+        """
+        url = (
+            name
+            if name.startswith(("http://", "https://"))
+            else f"/config/submissionuploads/{name}"
+        )
+        return await self._json("GET", url)
+
     async def vocabulary_entries(
         self, name: str, page: int = 0, size: int = 100
     ) -> Page[VocabularyEntry]:

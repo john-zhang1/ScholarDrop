@@ -23,7 +23,12 @@ from typing import Any
 
 from scholardrop.dspace import DSpaceError, VocabularyEntry
 from scholardrop.dspace.models import WorkspaceItem
-from scholardrop.submission.form import FORM_SECTION, parse_fields, sections_of
+from scholardrop.submission.form import (
+    FORM_SECTION,
+    UPLOAD_SECTION,
+    parse_fields,
+    sections_of,
+)
 
 log = logging.getLogger("scholardrop.submission")
 
@@ -104,6 +109,9 @@ class ConfigCache:
         # instance, read once, and expiring like the rest -- a provider added to
         # DSpace's configuration should appear without restarting this app.
         self.external_sources: Any = _Expiring(ttl_seconds)
+        # The upload step's own configuration, which is where the access
+        # conditions a collection offers live (DESIGN.md §13.5).
+        self.uploads: Any = _Expiring(ttl_seconds)
 
     def _all(self) -> tuple[Any, ...]:
         return (
@@ -113,6 +121,7 @@ class ConfigCache:
             self.licences,
             self.collection_names,
             self.external_sources,
+            self.uploads,
         )
 
     def clear(self) -> None:
@@ -184,6 +193,48 @@ async def load_form_configs(
             cache.forms[key] = config
         configs[section_id] = config
     return configs
+
+
+def upload_section(sections: list[dict[str, Any]]) -> tuple[str, str]:
+    """The upload panel's section id and the href of its configuration.
+
+    A definition can name its upload step anything, and the patch path that
+    applies an access condition names that id -- so it is read from the
+    definition rather than assumed to be `upload`. The href falls back to the
+    section id, which is what `UploadConfigurationService`'s map is keyed by.
+    """
+    for panel in sections:
+        if str(panel.get("sectionType") or "") != UPLOAD_SECTION:
+            continue
+        section_id = str(panel.get("id"))
+        href = (panel.get("_links") or {}).get("config", {}).get("href")
+        return section_id, str(href) if href else section_id
+    return "", ""
+
+
+async def load_upload_config(
+    client: Any, sections: list[dict[str, Any]], *, cache: ConfigCache, instance_key: str
+) -> dict[str, Any]:
+    """The upload step's configuration, or `{}` when there is none to read.
+
+    Never raises: a collection whose upload configuration cannot be read simply
+    offers no access conditions, which is the same outcome as a collection that
+    configures none -- and neither is a reason to fail the review form
+    (DESIGN.md §13.5).
+    """
+    _section_id, href = upload_section(sections)
+    if not href:
+        return {}
+    key = (instance_key, href)
+    config = cache.uploads.get(key)
+    if config is None:
+        try:
+            config = await client.submission_upload(href)
+        except DSpaceError as exc:
+            log.warning("could not read the upload configuration %s: %s", href, exc)
+            config = {}
+        cache.uploads[key] = config
+    return config
 
 
 async def load_vocabularies(

@@ -153,6 +153,12 @@
         {% for file in form.upload_files %}
         <li><strong>{{ file.name or filename or 'a file' }}</strong>
           {% if file.size_bytes %}<span class="quiet">· {{ file.megabytes }} MB</span>{% endif %}
+          {# The access picker, only where the collection configures conditions
+             (DESIGN.md §13.5). No options, no UI — and nothing patched. #}
+          {% if access_rows %}
+            {% set row = access_rows[loop.index0] %}
+            {% include "partials/access_choice.html" %}
+          {% endif %}
         </li>
         {% endfor %}
       </ul>

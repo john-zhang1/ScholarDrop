@@ -1,0 +1,41 @@
+{# Who may read one uploaded file (DESIGN.md §13.5).
+
+   Rendered once per file, and only where the collection's upload step actually
+   configures access conditions -- no options means this is never included,
+   because offering a choice the repository has not configured would be promising
+   something it will refuse.
+
+   The empty option is not "no access condition": it is "whatever this collection
+   does by default", which is what happens when nothing is patched. Saying so
+   plainly matters, because the difference between "I chose open access" and "I
+   left this alone" is invisible on the deposited item.
+
+   Expects `row` (submission.access.AccessRow). #}
+<div class="access-choice">
+  <label for="access-{{ row.index }}">Who may read this file</label>
+  <select id="access-{{ row.index }}" name="{{ row.choice_name }}"
+          hx-get="/review/{{ form.workspaceitem_id }}/access?index={{ row.index }}&amp;name={{ row.choice_name | urlencode }}"
+          hx-trigger="change"
+          {# `next`, not a chain: htmx's extended selectors are a prefix, so this
+             is the first matching element after the select. #}
+          hx-target="next .access-date"
+          hx-swap="innerHTML"
+          {% if row.error %}aria-invalid="true" aria-describedby="access-error-{{ row.index }}"{% endif %}>
+    <option value="">— the collection's default —</option>
+    {% for option in row.options %}
+    <option value="{{ option.name }}"{% if option.name == row.chosen_name %} selected{% endif %}>{{ option.label }}</option>
+    {% endfor %}
+  </select>
+
+  {# Where the date box lands. Rendered server-side for the condition this file
+     already carries, so a resumed draft arrives complete rather than blank. #}
+  <div class="access-date">
+    {% with option = row.selected, index = row.index, chosen = row.chosen_date, date_name = row.date_name %}
+      {% include "partials/access_date.html" %}
+    {% endwith %}
+  </div>
+
+  {% if row.error %}
+  <p class="error" id="access-error-{{ row.index }}">{{ row.error }}</p>
+  {% endif %}
+</div>

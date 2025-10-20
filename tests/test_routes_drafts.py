@@ -60,6 +60,20 @@ def test_a_draft_shows_its_collection_and_file(signed_in, fake_dspace) -> None:
     assert "thesis.pdf" in body
 
 
+def test_a_draft_names_its_file_as_dspace_actually_sends_it(signed_in, fake_dspace) -> None:
+    """An upload-section file has no `name` key: the filename is `dc.title` in
+    the bitstream's own metadata. Reading the key that is not there listed every
+    draft with a file as "no file attached", and said nothing about it."""
+    from tests.fakes import upload_file
+
+    given_drafts(fake_dspace, make_workspaceitem("7", files=[upload_file("thesis.pdf")]))
+
+    body = signed_in.get("/drafts/list").text
+
+    assert "thesis.pdf" in body
+    assert "no file attached" not in body
+
+
 def test_an_untitled_draft_is_still_resumable(signed_in, fake_dspace) -> None:
     given_drafts(fake_dspace, make_workspaceitem("7"))
 

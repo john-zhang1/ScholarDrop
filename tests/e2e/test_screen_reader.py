@@ -30,9 +30,13 @@ NAME_NOISE = re.compile(r"\bdc\.[a-z]|\bthesis\.[a-z]|\bREQUIRED\b")
 
 @pytest.fixture
 def review_page(signed_in_page, live_app, fake_dspace):
-    from tests.fakes import make_collection
+    from tests.fakes import make_collection, make_workspaceitem, upload_file
 
     fake_dspace.collections_by_uuid["c1"] = make_collection("c1", "OU - Dissertations")
+    # With a file attached, so the transcript covers the access picker too --
+    # "who may read this file" is exactly the kind of wording a person has to
+    # judge by ear (DESIGN.md §13.5).
+    fake_dspace.workspaceitems["42"] = make_workspaceitem("42", files=[upload_file("thesis.pdf")])
     page = signed_in_page
     page.goto(f"{live_app}/review/42")
     page.wait_for_selector("form input[name*='dc.title']")
@@ -137,9 +141,15 @@ def test_write_the_transcripts_for_a_person_to_read(
     if not os.environ.get("AX_TRANSCRIPTS"):
         pytest.skip("set AX_TRANSCRIPTS=1 to regenerate")
 
+    from tests.fakes import upload_file
+
     fake_dspace.workspaceitems = {
         "7": make_workspaceitem("7"),
         "8": make_workspaceitem("8", errors=[]),
+        # The review form is transcribed with a file attached, so the access
+        # picker is in it: "who may read this file" and "restricted until" are
+        # wording a person has to judge by ear (DESIGN.md §13.5).
+        "42": make_workspaceitem("42", files=[upload_file("thesis.pdf")]),
     }
     page = signed_in_page
     pages = [

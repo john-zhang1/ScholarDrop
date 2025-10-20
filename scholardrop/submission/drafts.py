@@ -17,6 +17,7 @@ from typing import Any
 from scholardrop.dspace import DSpaceError
 from scholardrop.dspace.models import WorkspaceItem
 from scholardrop.submission.definition import load_form_configs, load_sections
+from scholardrop.submission.form import UPLOAD_SECTION, UploadedFile
 from scholardrop.submission.readiness import Readiness, assess, labels_from
 from scholardrop.timestamps import format_timestamp
 
@@ -53,12 +54,22 @@ def first_value(sections: dict[str, Any], metadata_field: str) -> str:
 
 
 def filenames(sections: dict[str, Any]) -> list[str]:
-    upload = sections.get("upload")
+    """The names of the files a draft holds.
+
+    Read through `UploadedFile`, because **an upload-section file has no `name`
+    key**: the filename is `dc.title` in the bitstream's own metadata. Reading
+    `entry["name"]` finds nothing and never says so, which is how every draft
+    with a file attached was listed as "no file attached".
+    """
+    upload = sections.get(UPLOAD_SECTION)
     files = (upload or {}).get("files") if isinstance(upload, dict) else None
     names = []
     for entry in files or []:
-        if isinstance(entry, dict) and entry.get("name"):
-            names.append(str(entry["name"]))
+        if not isinstance(entry, dict):
+            continue
+        name = UploadedFile.from_payload(entry).name
+        if name:
+            names.append(name)
     return names
 
 

@@ -26,7 +26,16 @@
   <dt>File</dt>
   <dd>
     {% if form.upload_files %}
-      {% for file in form.upload_files %}{{ file.name or filename or 'a file' }}{{ ', ' if not loop.last }}{% endfor %}
+      {% for file in form.upload_files %}
+      <div class="summary-value">{{ file.name or filename or 'a file' }}
+        {# What will be applied to this file, in words (DESIGN.md §13.5). Only
+           where the collection offers conditions and one was chosen; otherwise
+           the collection's default applies and nothing is claimed. #}
+        {% if access_rows and access_rows[loop.index0].description %}
+        <span class="quiet">· {{ access_rows[loop.index0].description }}</span>
+        {% endif %}
+      </div>
+      {% endfor %}
     {% else %}{{ filename or 'no file attached' }}{% endif %}
   </dd>
   <dt>Deposit licence</dt>
@@ -85,6 +94,17 @@
       <input type="hidden" name="{{ field.name }}" value="">
       {% endif %}
     {% endfor %}
+  {% endfor %}
+  {# The access choices travel to the deposit the same way the metadata does:
+     nothing is written until the last step, so anything not carried here is
+     silently lost (DESIGN.md §13.5). #}
+  {% for row in access_rows or [] %}
+    {% if row.chosen_name %}
+  <input type="hidden" name="{{ row.choice_name }}" value="{{ row.chosen_name }}">
+      {% if row.chosen_date %}
+  <input type="hidden" name="{{ row.date_name }}" value="{{ row.chosen_date }}">
+      {% endif %}
+    {% endif %}
   {% endfor %}
   {% if license_checked or form.license_granted %}
   <input type="hidden" name="license_granted" value="true">
