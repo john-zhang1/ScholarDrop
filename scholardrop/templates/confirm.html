@@ -97,11 +97,13 @@
   {% endfor %}
   {# The access choices travel to the deposit the same way the metadata does:
      nothing is written until the last step, so anything not carried here is
-     silently lost (DESIGN.md §13.5). #}
+     silently lost (DESIGN.md §13.5). An *explicit* default is carried too, with
+     its empty value -- that is the choice that steps a file back from a stored
+     condition, and dropping the input here is dropping the choice. #}
   {% for row in access_rows or [] %}
-    {% if row.chosen_name %}
+    {% if row.explicit or row.chosen_name %}
   <input type="hidden" name="{{ row.choice_name }}" value="{{ row.chosen_name }}">
-      {% if row.chosen_date %}
+      {% if row.chosen_name and row.chosen_date %}
   <input type="hidden" name="{{ row.date_name }}" value="{{ row.chosen_date }}">
       {% endif %}
     {% endif %}

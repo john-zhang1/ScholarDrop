@@ -8,9 +8,12 @@ picker, and a condition nobody configured is never sent.
 
 from __future__ import annotations
 
+from html import unescape
+
 import pytest
 
 from scholardrop.submission.access import (
+    DEFAULT_DESCRIPTION,
     AccessChoice,
     AccessOption,
     build_operations,
@@ -20,6 +23,7 @@ from scholardrop.submission.access import (
     rows_for,
     validate_choices,
 )
+from scholardrop.submission.form import UploadedFile
 from tests.fakes import UPLOAD_CONFIG, make_workspaceitem, upload_file
 
 EMBARGO = AccessOption(name="embargo", has_start_date=True, max_start_date="2029-07-30")
@@ -29,6 +33,11 @@ OPTIONS = [OPEN, LEASE, EMBARGO]
 
 CHOICE = "access::0"
 DATE = "access::0::date"
+
+ONE_FILE = [UploadedFile(name="thesis.pdf")]
+ONE_EMBARGOED_FILE = [
+    UploadedFile(name="thesis.pdf", condition="embargo", condition_date="2028-01-01")
+]
 
 
 def post(client, path: str, pairs: list[tuple[str, str]]):
@@ -50,6 +59,22 @@ COMPLETE = [
 def with_file(fake_dspace):
     """A draft with one file, which is what a picker is rendered against."""
     fake_dspace.workspaceitems["42"] = make_workspaceitem("42", files=[upload_file("thesis.pdf")])
+    return fake_dspace
+
+
+@pytest.fixture
+def with_embargoed_file(fake_dspace):
+    """A draft whose file already carries a condition -- chosen here in an
+    earlier visit, or in DSpace's own submission UI."""
+    fake_dspace.workspaceitems["42"] = make_workspaceitem(
+        "42",
+        files=[
+            upload_file(
+                "thesis.pdf",
+                conditions=[{"name": "embargo", "startDate": "2028-06-01T00:00:00Z"}],
+            )
+        ],
+    )
     return fake_dspace
 
 
@@ -110,9 +135,24 @@ def test_something_that_is_not_a_date_is_refused() -> None:
 def test_a_condition_this_collection_does_not_offer_is_refused() -> None:
     choices = {0: AccessChoice(index=0, name="somethingelse")}
 
-    assert validate_choices(choices, OPTIONS) == {
+    assert validate_choices(choices, OPTIONS, file_count=1) == {
         0: "That is not an access condition this collection offers."
     }
+
+
+def test_a_choice_for_a_file_the_draft_no_longer_has_is_refused() -> None:
+    """Refused, never dropped: a silently dropped choice once let the deposited
+    page claim an embargo the repository was not asked for."""
+    choices = {5: AccessChoice(index=5, name="embargo", chosen_date="2028-01-01")}
+
+    assert validate_choices(choices, OPTIONS, file_count=1) == {
+        5: "This draft no longer has that file."
+    }
+
+
+def test_the_explicit_default_is_always_applicable() -> None:
+    """It asks the repository for nothing the repository has not already decided."""
+    assert validate_choices({0: AccessChoice(index=0, name="")}, OPTIONS, file_count=1) == {}
 
 
 # ---- reading the form ------------------------------------------------------
@@ -124,8 +164,17 @@ def test_a_choice_and_its_date_are_read_together() -> None:
     assert choices == {0: AccessChoice(index=0, name="embargo", chosen_date="2028-01-01")}
 
 
-def test_an_unchosen_file_contributes_nothing() -> None:
-    assert parse_choices([(CHOICE, ""), (DATE, "2028-01-01")]) == {}
+def test_an_unposted_file_contributes_nothing() -> None:
+    assert parse_choices([("traditionalpageone::dc.title", "A Thesis")]) == {}
+
+
+def test_an_explicit_default_is_a_choice_not_an_absence() -> None:
+    """`access::0=` is somebody choosing the collection's default -- the only way
+    to step a file back from a stored condition, so dropping it makes that
+    choice unmakeable."""
+    choices = parse_choices([(CHOICE, ""), (DATE, "2028-01-01")])
+
+    assert choices == {0: AccessChoice(index=0, name="", chosen_date="2028-01-01")}
 
 
 def test_junk_input_names_are_ignored() -> None:
@@ -147,7 +196,7 @@ def test_junk_input_names_are_ignored() -> None:
 def test_the_patch_names_the_section_the_definition_named() -> None:
     choices = {0: AccessChoice(index=0, name="embargo", chosen_date="2028-01-01")}
 
-    operations = build_operations("upload", choices, OPTIONS, file_count=1)
+    operations = build_operations("upload", choices, OPTIONS, files=ONE_FILE)
 
     assert operations == [
         {
@@ -161,7 +210,7 @@ def test_the_patch_names_the_section_the_definition_named() -> None:
 def test_a_lease_carries_an_end_date_instead() -> None:
     choices = {0: AccessChoice(index=0, name="lease", chosen_date="2026-12-01")}
 
-    operations = build_operations("upload", choices, OPTIONS, file_count=1)
+    operations = build_operations("upload", choices, OPTIONS, files=ONE_FILE)
 
     assert operations[0]["value"] == [{"name": "lease", "endDate": "2026-12-01"}]
 
@@ -169,7 +218,7 @@ def test_a_lease_carries_an_end_date_instead() -> None:
 def test_a_dateless_condition_carries_only_its_name() -> None:
     choices = {0: AccessChoice(index=0, name="openaccess")}
 
-    operations = build_operations("upload", choices, OPTIONS, file_count=1)
+    operations = build_operations("upload", choices, OPTIONS, files=ONE_FILE)
 
     assert operations[0]["value"] == [{"name": "openaccess"}]
 
@@ -178,13 +227,30 @@ def test_a_choice_for_a_file_that_is_not_there_is_dropped() -> None:
     """The index is a position in the bundle; one past the end is not a file."""
     choices = {3: AccessChoice(index=3, name="openaccess")}
 
-    assert build_operations("upload", choices, OPTIONS, file_count=1) == []
+    assert build_operations("upload", choices, OPTIONS, files=ONE_FILE) == []
 
 
 def test_an_unconfigured_condition_is_never_sent() -> None:
     choices = {0: AccessChoice(index=0, name="somethingelse")}
 
-    assert build_operations("upload", choices, OPTIONS, file_count=1) == []
+    assert build_operations("upload", choices, OPTIONS, files=ONE_FILE) == []
+
+
+def test_an_explicit_default_clears_a_stored_condition() -> None:
+    """The empty array is the clear: `TYPE_CUSTOM` policies are removed before
+    the array is read, and an empty one gives the operation nothing to re-apply."""
+    choices = {0: AccessChoice(index=0, name="")}
+
+    assert build_operations("upload", choices, OPTIONS, files=ONE_EMBARGOED_FILE) == [
+        {"op": "add", "path": "/sections/upload/files/0/accessConditions", "value": []}
+    ]
+
+
+def test_an_explicit_default_over_no_condition_patches_nothing() -> None:
+    """For a file with nothing stored, the default is what not patching means."""
+    choices = {0: AccessChoice(index=0, name="")}
+
+    assert build_operations("upload", choices, OPTIONS, files=ONE_FILE) == []
 
 
 # ---- the rows the template renders -----------------------------------------
@@ -224,10 +290,29 @@ def test_what_was_just_posted_beats_what_is_stored() -> None:
     assert row.chosen_date == ""
 
 
+def test_the_explicit_default_beats_what_is_stored() -> None:
+    """Choosing "the collection's default" over a stored embargo must stick --
+    truthiness on the choice put the embargo straight back."""
+    row = rows_for(ONE_EMBARGOED_FILE, OPTIONS, choices={0: AccessChoice(index=0, name="")})[0]
+
+    assert row.chosen_name == ""
+    assert row.explicit is True
+    assert row.description == DEFAULT_DESCRIPTION
+
+
 def test_the_row_describes_what_will_be_applied() -> None:
     choices = {0: AccessChoice(index=0, name="embargo", chosen_date="2028-01-01")}
 
-    assert describe_choices(choices, OPTIONS) == {0: "Embargoed — restricted until 2028-01-01"}
+    assert describe_choices(choices, OPTIONS, files=ONE_FILE) == {
+        0: "Embargoed — restricted until 2028-01-01"
+    }
+
+
+def test_nothing_is_described_that_was_not_sent() -> None:
+    """Same bounds as the patch builder, or the deposited page invents a promise."""
+    choices = {5: AccessChoice(index=5, name="embargo", chosen_date="2028-01-01")}
+
+    assert describe_choices(choices, OPTIONS, files=ONE_FILE) == {}
 
 
 # ---- through the routes ----------------------------------------------------
@@ -365,3 +450,54 @@ def test_nothing_is_patched_when_the_slice_is_off(app, with_file, with_collectio
 
     operations = [op for patch in with_file.patches for op in patch]
     assert not any("accessConditions" in op["path"] for op in operations)
+
+
+def test_a_choice_for_a_vanished_file_is_refused_not_dropped(with_file, with_collection) -> None:
+    """A file removed in another tab between render and deposit. The old
+    behaviour dropped the choice from the patch but still described it on the
+    deposited page -- an embargo claimed that the repository was never asked for."""
+    response = post(
+        with_collection,
+        "/review/42/deposit",
+        [*COMPLETE, ("access::5", "embargo"), ("access::5::date", "2028-01-01")],
+    )
+
+    assert response.status_code == 400
+    assert "files on this draft have changed" in response.text
+    assert with_file.patches == [], "nothing may be written when the files have changed"
+    assert not with_file.called("deposit")
+
+
+def test_the_default_choice_over_a_stored_condition_clears_it(
+    with_embargoed_file, with_collection
+) -> None:
+    """Stepping a file back from its stored embargo has to actually happen --
+    the stored condition once refilled the choice and travelled to the deposit."""
+    post(with_collection, "/review/42/deposit", [*COMPLETE, (CHOICE, "")])
+
+    operations = [op for patch in with_embargoed_file.patches for op in patch]
+    assert {
+        "op": "add",
+        "path": "/sections/upload/files/0/accessConditions",
+        "value": [],
+    } in operations
+
+
+def test_the_confirm_page_does_not_resurrect_the_stored_condition(
+    with_embargoed_file, with_collection
+) -> None:
+    # unescape: the description's apostrophe renders as &#39;.
+    body = unescape(post(with_collection, "/review/42/confirm", [*COMPLETE, (CHOICE, "")]).text)
+
+    assert f'name="{CHOICE}" value=""' in body, "the explicit default must travel to the deposit"
+    assert DEFAULT_DESCRIPTION in body
+    assert "restricted until" not in body, "the stored embargo must not come back as the choice"
+
+
+def test_the_deposited_page_says_the_default_replaced_the_condition(
+    with_embargoed_file, with_collection
+) -> None:
+    body = unescape(post(with_collection, "/review/42/deposit", [*COMPLETE, (CHOICE, "")]).text)
+
+    assert DEFAULT_DESCRIPTION in body
+    assert "restricted until" not in body

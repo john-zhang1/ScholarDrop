@@ -292,12 +292,20 @@ def make_workspaceitem(wsi_id: str = "42", **kwargs: Any) -> WorkspaceItem:
     return WorkspaceItem.from_payload(workspaceitem_payload(wsi_id, **kwargs))
 
 
-def upload_file(filename: str, size_bytes: int = 1024, uuid: str = "bs-1") -> dict[str, Any]:
+def upload_file(
+    filename: str,
+    size_bytes: int = 1024,
+    uuid: str = "bs-1",
+    conditions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """One entry of the upload section's `files`, shaped as DSpace 9.2 sends it.
 
     Note what is *not* here: a `name` key. `UploadBitstreamRest` has none -- the
     filename is `dc.title` in the bitstream's metadata (confirmed against a live
     draft, 2026-07-30). A fixture that invents one hides the bug it should catch.
+
+    `conditions` is the file's stored `accessConditions` -- what a draft carries
+    when a condition was already applied, here or in DSpace's own UI.
     """
     return {
         "uuid": uuid,
@@ -306,7 +314,7 @@ def upload_file(filename: str, size_bytes: int = 1024, uuid: str = "bs-1") -> di
             "dc.title": [{"value": filename, "language": None, "place": 0}],
             "dc.source": [{"value": filename, "language": None, "place": 0}],
         },
-        "accessConditions": [],
+        "accessConditions": conditions or [],
         "format": {"mimetype": "application/pdf", "shortDescription": "Adobe PDF"},
     }
 

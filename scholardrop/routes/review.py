@@ -365,7 +365,13 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         submitted = parse_submission(posted, live.allowed)
         orcids = parse_orcids(posted, live.allowed)
         languages = parse_languages(posted, live.allowed)
-        access = parse_choices(posted)
+        # With the slice off, nothing rendered a picker, so any access input in
+        # the POST is stale or crafted -- ignored wholesale, like the flag says.
+        access = parse_choices(posted) if _access(request) else {}
+        # The files the *item* holds right now, which is what bounds every use
+        # of a posted file index: validation, the patch, and the confirmation.
+        deposited_files = _uploaded_files(live.item, live.upload_section_id)
+        deposited_names = {i: f.name for i, f in enumerate(deposited_files)}
 
         def back(
             message: str,
@@ -413,13 +419,22 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
             )
 
         # Checked before anything is written, and with the repository's own rules
-        # (DESIGN.md §13.5): an embargo with no date, or one beyond the configured
-        # limit, is a sentence beside the file rather than a 422 at the end.
-        access_problems = validate_choices(access, live.access_options)
+        # (DESIGN.md §13.5): an embargo with no date, one beyond the configured
+        # limit, or one naming a file the draft no longer holds is a sentence
+        # beside the file rather than a 422 at the end -- or, worse, a silently
+        # dropped choice the confirmation would still have claimed.
+        access_problems = validate_choices(
+            access, live.access_options, file_count=len(deposited_files)
+        )
         if access_problems:
             log.info("workspaceitem %s has an unusable access condition", wsi_id)
+            # A problem naming a file that is no longer there has no row to sit
+            # beside, so the banner has to carry that sentence itself.
+            stale = any(not 0 <= i < len(deposited_files) for i in access_problems)
             return back(
-                "The access condition on one of these files cannot be applied as it stands.",
+                "The files on this draft have changed, so the access choices need another look."
+                if stale
+                else "The access condition on one of these files cannot be applied as it stands.",
                 {},
                 400,
                 access_problems,
@@ -436,14 +451,12 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         # After the metadata, because a file's policies are only worth setting on
         # a draft the repository is going to accept -- and one patch request
         # carries both.
-        deposited_files = _uploaded_files(live.item, live.upload_section_id)
-        deposited_names = {i: f.name for i, f in enumerate(deposited_files)}
         operations.extend(
             access_operations(
                 live.upload_section_id,
                 access,
                 live.access_options,
-                file_count=len(deposited_files),
+                files=deposited_files,
             )
         )
         try:
@@ -551,9 +564,13 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         # And what was asked of each file (DESIGN.md §13.5). Named from the values
         # sent, because the item is not read back after a deposit that entered a
         # workflow -- and the answer to "is it embargoed?" must not depend on that.
+        # `describe_choices` is bounded by the same files as the patch, so this
+        # can never claim a condition the repository was not asked for.
         access_applied=[
             (deposited_names.get(index, ""), description)
-            for index, description in sorted(describe_choices(access, live.access_options).items())
+            for index, description in sorted(
+                describe_choices(access, live.access_options, files=deposited_files).items()
+            )
         ],
     )
 

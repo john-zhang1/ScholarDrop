@@ -38,6 +38,7 @@ from scholardrop.submission.definition import (  # noqa: E402
     load_upload_config,
     upload_section,
 )
+from scholardrop.submission.form import UploadedFile  # noqa: E402
 from scholardrop.submission.patch import field_index  # noqa: E402
 
 INSTANCE_KEY = "gate"
@@ -171,7 +172,10 @@ async def deposit(
             section_id,
             {0: AccessChoice(index=0, name=condition, chosen_date=chosen_date)},
             options,
-            file_count=1,
+            files=[
+                UploadedFile.from_payload(f)
+                for f in item.sections.get(section_id, {}).get("files", [])
+            ],
         )
     )
     patched = await client.patch_sections(draft.id, operations)

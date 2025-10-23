@@ -21,7 +21,9 @@ so the wording is derived from the option's shape rather than from its name.
 
 The write happens once, at deposit, like everything else here:
 `add /sections/{upload}/files/{n}/accessConditions` with the whole array replaces
-that file's custom policies (`BitstreamResourcePolicyAddPatchOperation`).
+that file's custom policies (`BitstreamResourcePolicyAddPatchOperation`) -- and
+an **empty** array therefore clears them, which is how an explicit "the
+collection's default" steps a file back from a condition its draft stores.
 """
 
 from __future__ import annotations
@@ -38,6 +40,11 @@ log = logging.getLogger("scholardrop.submission")
 # position the patch path names.
 NAME_PREFIX = "access"
 DATE_SUFFIX = "date"
+
+# What choosing no condition means, in the words the confirm and deposited pages
+# use. It is a real choice, distinct from open access: for a file that stores no
+# custom condition it patches nothing, and for one that does it clears it.
+DEFAULT_DESCRIPTION = "The collection's default"
 
 # DSpace's own shipped condition names, in words a submitter can act on. An
 # unknown name is shown as it is: these are defaults, not this repository's
@@ -161,6 +168,14 @@ class AccessRow:
     chosen_name: str = ""
     chosen_date: str = ""
     error: str = ""
+    # Whether the submitter posted a choice for this file -- including the empty
+    # one. "Chose the collection's default" and "was never asked" render the same
+    # picker but must not deposit the same way: the first clears a stored
+    # condition, the second leaves it alone.
+    explicit: bool = False
+    # The condition the draft already stores, so an explicit default over it can
+    # be said in words rather than shown as silence.
+    stored_condition: str = ""
 
     @property
     def choice_name(self) -> str:
@@ -176,9 +191,13 @@ class AccessRow:
 
     @property
     def description(self) -> str:
-        """This file's condition in a sentence, or "" when none was chosen."""
+        """This file's condition in a sentence, or "" when nothing will change."""
         option = self.selected
-        return option.describe(self.chosen_date) if option else ""
+        if option:
+            return option.describe(self.chosen_date)
+        if self.explicit and not self.chosen_name and self.stored_condition:
+            return DEFAULT_DESCRIPTION
+        return ""
 
 
 def rows_for(
@@ -194,6 +213,9 @@ def rows_for(
     the same rule as `_apply_submitted` on the metadata form, and for the same
     reason: a page that comes back after a validation error must come back with
     the choices that were made, not with the ones the repository still holds.
+    **The empty choice wins too**: `choice is not None`, never truthiness, or
+    picking "the collection's default" over a stored embargo would be silently
+    put back to the embargo on the very next render.
 
     **No configured options means no rows**, and therefore no picker anywhere:
     the rule lives here rather than in each template that renders one.
@@ -205,14 +227,21 @@ def rows_for(
     rows = []
     for index, file in enumerate(files):
         choice = choices.get(index)
+        stored = getattr(file, "condition", "")
         rows.append(
             AccessRow(
                 index=index,
                 filename=getattr(file, "name", "") or "",
                 options=options,
-                chosen_name=choice.name if choice else getattr(file, "condition", ""),
-                chosen_date=(choice.chosen_date if choice else getattr(file, "condition_date", "")),
+                chosen_name=choice.name if choice is not None else stored,
+                chosen_date=(
+                    choice.chosen_date
+                    if choice is not None
+                    else getattr(file, "condition_date", "")
+                ),
                 error=problems.get(index, ""),
+                explicit=choice is not None,
+                stored_condition=stored,
             )
         )
     return rows
@@ -242,6 +271,12 @@ def parse_choices(items: list[tuple[str, str]]) -> dict[int, AccessChoice]:
     Anything that is not `access::<integer>` is ignored rather than guessed at:
     these names come back in a POST body, and the index goes straight into the
     patch path that names which file gets the policy.
+
+    **An empty value is kept, not dropped.** A posted `access::0=` is somebody
+    choosing "the collection's default" -- a real decision, and the only way to
+    step a file back from a condition its draft already stores. Dropping it made
+    the choice unmakeable: the stored condition filled the gap on the next
+    render and travelled to the deposit as though it had been chosen.
     """
     chosen: dict[int, str] = {}
     dates: dict[int, str] = {}
@@ -259,16 +294,29 @@ def parse_choices(items: list[tuple[str, str]]) -> dict[int, AccessChoice]:
     return {
         index: AccessChoice(index=index, name=name, chosen_date=dates.get(index, ""))
         for index, name in chosen.items()
-        if name
     }
 
 
 def validate_choices(
-    choices: dict[int, AccessChoice], options: list[AccessOption]
+    choices: dict[int, AccessChoice], options: list[AccessOption], *, file_count: int
 ) -> dict[int, str]:
-    """Per-file complaints, keyed by file index. Empty when everything is fine."""
+    """Per-file complaints, keyed by file index. Empty when everything is fine.
+
+    `file_count` is how many files the *item* holds at deposit time, and a
+    choice naming a position past it is refused, not dropped: the page was
+    rendered against files that are no longer there -- a re-upload in another
+    tab, or a crafted post -- and silently ignoring the choice would let the
+    confirmation claim a condition that was never sent.
+    """
     problems: dict[int, str] = {}
     for index, choice in sorted(choices.items()):
+        if not 0 <= index < file_count:
+            problems[index] = "This draft no longer has that file."
+            continue
+        if not choice.name:
+            # The collection's default is always applicable -- it asks the
+            # repository for nothing the repository has not already decided.
+            continue
         option = option_named(options, choice.name)
         if option is None:
             # Not one of this collection's options: a stale page or a crafted
@@ -286,7 +334,7 @@ def build_operations(
     choices: dict[int, AccessChoice],
     options: list[AccessOption],
     *,
-    file_count: int,
+    files: list[Any],
 ) -> list[dict[str, Any]]:
     """One `add` per file whose access condition was chosen.
 
@@ -295,14 +343,32 @@ def build_operations(
     first when the path ends at `accessConditions` (three segments), and appends
     when it ends at `/-`. Setting is the honest expression of a picker.
 
-    A choice naming a file the draft does not have is dropped: the index is a
-    position in the bundle, and one past the end would silently do nothing --
-    or, worse, land on somebody else's file after a re-upload.
+    **An explicit default clears.** For a file that stores no custom condition,
+    choosing "the collection's default" is what not patching already means; for
+    one that does, the empty array steps it back -- the operation removes the
+    `TYPE_CUSTOM` policies before reading the array, and an empty array gives it
+    nothing to re-apply (verified against the 9.2 source and live, 2026-07-31).
+
+    A choice naming a file the draft does not have is dropped -- the index is a
+    position in the bundle, and one past the end names nothing. `validate_choices`
+    refuses such a choice before this runs; the guard here is for any other
+    caller, and keeps the operations bounded by the same `files` the deposited
+    page describes.
     """
     operations: list[dict[str, Any]] = []
     for index, choice in sorted(choices.items()):
-        if not 0 <= index < file_count:
+        if not 0 <= index < len(files):
             log.info("ignoring an access condition for file %s, which this draft has no", index)
+            continue
+        if not choice.name:
+            if getattr(files[index], "condition", ""):
+                operations.append(
+                    {
+                        "op": "add",
+                        "path": f"/sections/{section_id}/files/{index}/accessConditions",
+                        "value": [],
+                    }
+                )
             continue
         option = option_named(options, choice.name)
         if option is None:
@@ -319,11 +385,23 @@ def build_operations(
 
 
 def describe_choices(
-    choices: dict[int, AccessChoice], options: list[AccessOption]
+    choices: dict[int, AccessChoice], options: list[AccessOption], *, files: list[Any]
 ) -> dict[int, str]:
-    """What each file's chosen condition says, for the confirm and deposited pages."""
+    """What each file's chosen condition says, for the confirm and deposited pages.
+
+    Takes the same `files` as `build_operations` and applies the same bounds, so
+    nothing can be described here that was not sent there -- the deposited page
+    once claimed an embargo for a file index the patch had silently dropped,
+    which is the one sentence this feature exists never to get wrong.
+    """
     described: dict[int, str] = {}
     for index, choice in choices.items():
+        if not 0 <= index < len(files):
+            continue
+        if not choice.name:
+            if getattr(files[index], "condition", ""):
+                described[index] = DEFAULT_DESCRIPTION
+            continue
         option = option_named(options, choice.name)
         if option is not None:
             described[index] = option.describe(choice.chosen_date)
