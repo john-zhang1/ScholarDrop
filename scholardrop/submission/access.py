@@ -176,10 +176,20 @@ class AccessRow:
     # The condition the draft already stores, so an explicit default over it can
     # be said in words rather than shown as silence.
     stored_condition: str = ""
+    # How many the draft stores in all. The picker holds one, DSpace's own UI can
+    # stack several -- above one, the row says that choosing here replaces them.
+    stored_count: int = 0
 
     @property
     def choice_name(self) -> str:
         return input_name(self.index)
+
+    @property
+    def chosen_label(self) -> str:
+        """The chosen condition in words, even one the collection no longer
+        offers -- which has no `AccessOption` to ask."""
+        option = self.selected
+        return option.label if option else CONDITION_LABELS.get(self.chosen_name, self.chosen_name)
 
     @property
     def date_name(self) -> str:
@@ -242,6 +252,7 @@ def rows_for(
                 error=problems.get(index, ""),
                 explicit=choice is not None,
                 stored_condition=stored,
+                stored_count=getattr(file, "condition_count", 0),
             )
         )
     return rows
@@ -258,6 +269,27 @@ def parse_options(payload: dict[str, Any] | None) -> list[AccessOption]:
 
 def option_named(options: list[AccessOption], name: str) -> AccessOption | None:
     return next((o for o in options if o.name == name), None)
+
+
+def restates_stored(choice: AccessChoice, file: Any) -> bool:
+    """Whether this choice merely restates the condition the draft stores.
+
+    The select posts its value whether or not anyone touched it, so an untouched
+    picker sends the stored condition straight back -- and re-*setting* it would
+    clear whatever else the file carries: a second condition stacked in DSpace's
+    own UI would be silently deleted by a deposit that changed nothing. A
+    restatement therefore produces no operation, and passes validation even for
+    a condition this collection no longer offers -- keeping what is already there
+    is not a new ask.
+
+    The date counts as unchanged when it is the stored one *or* empty: an option
+    the collection no longer configures renders no date box, so its date cannot
+    come back with the name.
+    """
+    stored = getattr(file, "condition", "")
+    if not stored or choice.name != stored:
+        return False
+    return choice.chosen_date in ("", getattr(file, "condition_date", ""))
 
 
 def input_name(index: int, *, date_input: bool = False) -> str:
@@ -298,24 +330,28 @@ def parse_choices(items: list[tuple[str, str]]) -> dict[int, AccessChoice]:
 
 
 def validate_choices(
-    choices: dict[int, AccessChoice], options: list[AccessOption], *, file_count: int
+    choices: dict[int, AccessChoice], options: list[AccessOption], *, files: list[Any]
 ) -> dict[int, str]:
     """Per-file complaints, keyed by file index. Empty when everything is fine.
 
-    `file_count` is how many files the *item* holds at deposit time, and a
-    choice naming a position past it is refused, not dropped: the page was
-    rendered against files that are no longer there -- a re-upload in another
-    tab, or a crafted post -- and silently ignoring the choice would let the
-    confirmation claim a condition that was never sent.
+    `files` is what the *item* holds at deposit time, and a choice naming a
+    position past it is refused, not dropped: the page was rendered against
+    files that are no longer there -- a re-upload in another tab, or a crafted
+    post -- and silently ignoring the choice would let the confirmation claim a
+    condition that was never sent.
     """
     problems: dict[int, str] = {}
     for index, choice in sorted(choices.items()):
-        if not 0 <= index < file_count:
+        if not 0 <= index < len(files):
             problems[index] = "This draft no longer has that file."
             continue
         if not choice.name:
             # The collection's default is always applicable -- it asks the
             # repository for nothing the repository has not already decided.
+            continue
+        if restates_stored(choice, files[index]):
+            # What the file already carries, coming back with the form. No
+            # operation will be sent for it, so there is nothing to refuse.
             continue
         option = option_named(options, choice.name)
         if option is None:
@@ -370,6 +406,11 @@ def build_operations(
                     }
                 )
             continue
+        if restates_stored(choice, files[index]):
+            # The untouched picker posting the stored condition back. Sending it
+            # would re-*set* the file's policies and delete any the picker does
+            # not show; a deposit that changed nothing must change nothing.
+            continue
         option = option_named(options, choice.name)
         if option is None:
             log.info("ignoring unconfigured access condition %r", choice.name)
@@ -404,5 +445,10 @@ def describe_choices(
             continue
         option = option_named(options, choice.name)
         if option is not None:
-            described[index] = option.describe(choice.chosen_date)
+            chosen = choice.chosen_date
+            if not chosen and restates_stored(choice, files[index]):
+                # An untouched picker may post the name without its date; the
+                # date that applies is the one the draft stores.
+                chosen = getattr(files[index], "condition_date", "")
+            described[index] = option.describe(chosen)
     return described

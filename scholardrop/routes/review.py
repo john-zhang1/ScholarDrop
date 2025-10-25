@@ -423,9 +423,7 @@ async def deposit(request: Request, wsi_id: DraftId) -> Response:
         # limit, or one naming a file the draft no longer holds is a sentence
         # beside the file rather than a 422 at the end -- or, worse, a silently
         # dropped choice the confirmation would still have claimed.
-        access_problems = validate_choices(
-            access, live.access_options, file_count=len(deposited_files)
-        )
+        access_problems = validate_choices(access, live.access_options, files=deposited_files)
         if access_problems:
             log.info("workspaceitem %s has an unusable access condition", wsi_id)
             # A problem naming a file that is no longer there has no row to sit
@@ -629,7 +627,9 @@ async def orcid_suggestions(
     # (`section::metadata.field`), which is why the row tells us that name; `q`
     # is the plain form, for anything driving this endpoint directly.
     typed = q or (request.query_params.get(name, "") if name else "")
-    people = await orcid_lookup.search(typed, settings)
+    people = await orcid_lookup.search(
+        typed, settings, client=getattr(request.app.state, "orcid_http", None)
+    )
     return render(
         request,
         "partials/orcid_results.html",
@@ -710,7 +710,10 @@ async def access_date(
 
     The options are read from this draft's own upload configuration (cached),
     not from the query string: unlike a vocabulary name, this decides what the
-    form will ask somebody to promise about access.
+    form will ask somebody to promise about access. But *only* the options: the
+    form configs and vocabularies `_load` would also gather render nothing in
+    this fragment, so a picker change costs one workspaceitem read plus cache
+    hits, not a re-fetch of everything the review page needs.
     """
     session = require_session(request)
     instance = session_instance(request, session)
@@ -718,16 +721,15 @@ async def access_date(
         return HTMLResponse("")
 
     chosen = option or (request.query_params.get(name, "") if name else "")
+    cache = request.app.state.form_configs
     async with dspace_client(request, session) as client:
-        live = await _load(
-            client,
-            wsi_id,
-            cache=request.app.state.form_configs,
-            instance_key=instance.key,
-            access=True,
+        item = await client.get_workspaceitem(wsi_id)
+        sections = await load_sections(client, item, cache=cache, instance_key=instance.key)
+        options = parse_options(
+            await load_upload_config(client, sections, cache=cache, instance_key=instance.key)
         )
 
-    selected = next((o for o in live.access_options if o.name == chosen), None)
+    selected = next((o for o in options if o.name == chosen), None)
     return render(
         request,
         "partials/access_date.html",

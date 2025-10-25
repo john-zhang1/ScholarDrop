@@ -191,32 +191,48 @@ class SubmissionLog:
         Both filters are required rather than defaulted: a call that forgot one
         would return somebody else's submissions, and the wrong default here is
         not a bug that shows up as an error.
+
+        Degrades like every other read here: corruption SQLite only discovers
+        mid-query -- the file was fine at `open_log` -- must not take the status
+        page down, so it is a warning and "no history", same as no file at all.
         """
         if not (base_url and eperson_uuid):
             return []
-        rows = self._db.execute(
-            "SELECT * FROM submissions WHERE base_url = ? AND eperson_uuid = ? "
-            "ORDER BY deposited_at DESC, id DESC LIMIT ? OFFSET ?",
-            (base_url.rstrip("/"), eperson_uuid, max(int(limit), 0), max(int(offset), 0)),
-        ).fetchall()
+        try:
+            rows = self._db.execute(
+                "SELECT * FROM submissions WHERE base_url = ? AND eperson_uuid = ? "
+                "ORDER BY deposited_at DESC, id DESC LIMIT ? OFFSET ?",
+                (base_url.rstrip("/"), eperson_uuid, max(int(limit), 0), max(int(offset), 0)),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            log.warning("could not read the submissions log at %s: %s", self.path, exc)
+            return []
         return [Deposit.from_row(row) for row in rows]
 
     def count_for_person(self, *, base_url: str, eperson_uuid: str) -> int:
         if not (base_url and eperson_uuid):
             return 0
-        row = self._db.execute(
-            "SELECT COUNT(*) AS n FROM submissions WHERE base_url = ? AND eperson_uuid = ?",
-            (base_url.rstrip("/"), eperson_uuid),
-        ).fetchone()
+        try:
+            row = self._db.execute(
+                "SELECT COUNT(*) AS n FROM submissions WHERE base_url = ? AND eperson_uuid = ?",
+                (base_url.rstrip("/"), eperson_uuid),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            log.warning("could not count the submissions log at %s: %s", self.path, exc)
+            return 0
         return int(row["n"])
 
     def forget(self, *, base_url: str, wsi_id: str) -> int:
         """Drop a row. For the case where the deposit it claims never happened."""
-        cursor = self._db.execute(
-            "DELETE FROM submissions WHERE base_url = ? AND wsi_id = ?",
-            (base_url.rstrip("/"), str(wsi_id)),
-        )
-        self._db.commit()
+        try:
+            cursor = self._db.execute(
+                "DELETE FROM submissions WHERE base_url = ? AND wsi_id = ?",
+                (base_url.rstrip("/"), str(wsi_id)),
+            )
+            self._db.commit()
+        except sqlite3.Error as exc:
+            log.warning("could not forget draft %s from the submissions log: %s", wsi_id, exc)
+            return 0
         return cursor.rowcount
 
 

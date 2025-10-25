@@ -123,6 +123,18 @@ def test_a_write_that_fails_says_so_instead_of_raising(tmp_path: Path) -> None:
     assert history.record(a_deposit()) is False
 
 
+def test_a_read_that_fails_degrades_to_no_history(tmp_path: Path) -> None:
+    """Corruption SQLite only finds mid-query -- the file opened fine -- must
+    read as "no history", not take the status page down with a 500."""
+    history = open_log(tmp_path / "s.sqlite")
+    history.record(a_deposit())
+    history._db.close()
+
+    assert history.for_person(base_url=BASE, eperson_uuid="eperson-1") == []
+    assert history.count_for_person(base_url=BASE, eperson_uuid="eperson-1") == 0
+    assert history.forget(base_url=BASE, wsi_id="42") == 0
+
+
 def test_a_path_that_is_not_a_database_is_LogUnavailable(tmp_path: Path) -> None:
     path = tmp_path / "not-a-db.sqlite"
     path.write_text("this is not SQLite")

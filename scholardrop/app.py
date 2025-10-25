@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -241,9 +242,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         background.append(asyncio.create_task(_warm_extraction(app)))
     if _should_warm_local(app):
         background.append(asyncio.create_task(_warm_local(app)))
+    # One connection pool for every ORCID lookup, instead of a TLS handshake per
+    # keystroke. The route falls back to a per-request client when this is absent
+    # (a test app whose lifespan never ran), so nothing depends on it existing.
+    app.state.orcid_http = httpx.AsyncClient(timeout=app.state.settings.orcid_timeout_seconds)
     try:
         yield
     finally:
+        await app.state.orcid_http.aclose()
         for task in background:
             task.cancel()
         for task in background:

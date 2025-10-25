@@ -74,6 +74,17 @@ def test_a_draft_names_its_file_as_dspace_actually_sends_it(signed_in, fake_dspa
     assert "no file attached" not in body
 
 
+def test_files_are_found_by_shape_not_by_the_section_id() -> None:
+    """A definition may call its upload step anything (the access-condition
+    patch path learned this first); any section carrying a `files` list is an
+    upload section, and a hardcoded `upload` id reads a renamed one as "no file
+    attached"."""
+    from scholardrop.submission.drafts import filenames
+    from tests.fakes import upload_file
+
+    assert filenames({"myUploadStep": {"files": [upload_file("renamed.pdf")]}}) == ["renamed.pdf"]
+
+
 def test_an_untitled_draft_is_still_resumable(signed_in, fake_dspace) -> None:
     given_drafts(fake_dspace, make_workspaceitem("7"))
 

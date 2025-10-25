@@ -298,9 +298,13 @@ class UploadedFile:
     uuid: str = ""
     # The access condition this file already carries, if any (DESIGN.md §13.5):
     # its name and whichever date it holds. A resumed draft shows what was chosen
-    # last time rather than presenting the picker as though nothing was.
+    # last time rather than presenting the picker as though nothing was. The
+    # picker holds one, but DSpace's own UI can stack several -- `condition` is
+    # the first and `condition_count` says how many there really are, so the
+    # picker can warn that choosing here replaces the whole set.
     condition: str = ""
     condition_date: str = ""
+    condition_count: int = 0
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> UploadedFile:
@@ -311,9 +315,10 @@ class UploadedFile:
             first = entries[0] if isinstance(entries, list) and entries else None
             return str(first.get("value") or "") if isinstance(first, dict) else ""
 
-        conditions = payload.get("accessConditions") or []
-        first = conditions[0] if isinstance(conditions, list) and conditions else {}
-        first = first if isinstance(first, dict) else {}
+        conditions = payload.get("accessConditions")
+        conditions = conditions if isinstance(conditions, list) else []
+        conditions = [c for c in conditions if isinstance(c, dict)]
+        first = conditions[0] if conditions else {}
 
         return cls(
             # `name` last, and only as a courtesy to anything that does send one.
@@ -323,6 +328,7 @@ class UploadedFile:
             condition=str(first.get("name") or ""),
             # Only one of the two is ever set, by the option's own configuration.
             condition_date=str(first.get("startDate") or first.get("endDate") or "")[:10],
+            condition_count=len(conditions),
         )
 
     @property

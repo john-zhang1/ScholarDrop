@@ -135,7 +135,7 @@ def test_something_that_is_not_a_date_is_refused() -> None:
 def test_a_condition_this_collection_does_not_offer_is_refused() -> None:
     choices = {0: AccessChoice(index=0, name="somethingelse")}
 
-    assert validate_choices(choices, OPTIONS, file_count=1) == {
+    assert validate_choices(choices, OPTIONS, files=ONE_FILE) == {
         0: "That is not an access condition this collection offers."
     }
 
@@ -145,14 +145,14 @@ def test_a_choice_for_a_file_the_draft_no_longer_has_is_refused() -> None:
     page claim an embargo the repository was not asked for."""
     choices = {5: AccessChoice(index=5, name="embargo", chosen_date="2028-01-01")}
 
-    assert validate_choices(choices, OPTIONS, file_count=1) == {
+    assert validate_choices(choices, OPTIONS, files=ONE_FILE) == {
         5: "This draft no longer has that file."
     }
 
 
 def test_the_explicit_default_is_always_applicable() -> None:
     """It asks the repository for nothing the repository has not already decided."""
-    assert validate_choices({0: AccessChoice(index=0, name="")}, OPTIONS, file_count=1) == {}
+    assert validate_choices({0: AccessChoice(index=0, name="")}, OPTIONS, files=ONE_FILE) == {}
 
 
 # ---- reading the form ------------------------------------------------------
@@ -251,6 +251,34 @@ def test_an_explicit_default_over_no_condition_patches_nothing() -> None:
     choices = {0: AccessChoice(index=0, name="")}
 
     assert build_operations("upload", choices, OPTIONS, files=ONE_FILE) == []
+
+
+def test_an_untouched_picker_restates_and_nothing_is_sent() -> None:
+    """The select posts its value whether or not anyone touched it. Re-*setting*
+    the stored condition would delete any second condition stacked in DSpace's
+    own UI, so a deposit that changed nothing must change nothing."""
+    choices = {0: AccessChoice(index=0, name="embargo", chosen_date="2028-01-01")}
+
+    assert build_operations("upload", choices, OPTIONS, files=ONE_EMBARGOED_FILE) == []
+
+
+def test_a_changed_date_is_not_a_restatement() -> None:
+    choices = {0: AccessChoice(index=0, name="embargo", chosen_date="2029-01-01")}
+
+    operations = build_operations("upload", choices, OPTIONS, files=ONE_EMBARGOED_FILE)
+
+    assert operations[0]["value"] == [{"name": "embargo", "startDate": "2029-01-01"}]
+
+
+def test_a_stored_condition_the_collection_no_longer_offers_may_be_kept() -> None:
+    """Keeping what is already there is not a new ask, so it validates and sends
+    nothing -- even with no date posted, because an option the collection does
+    not configure renders no date box to post one from."""
+    stored = [UploadedFile(name="thesis.pdf", condition="ouLegacy", condition_date="2028-01-01")]
+    choices = {0: AccessChoice(index=0, name="ouLegacy")}
+
+    assert validate_choices(choices, OPTIONS, files=stored) == {}
+    assert build_operations("upload", choices, OPTIONS, files=stored) == []
 
 
 # ---- the rows the template renders -----------------------------------------
@@ -501,3 +529,77 @@ def test_the_deposited_page_says_the_default_replaced_the_condition(
 
     assert DEFAULT_DESCRIPTION in body
     assert "restricted until" not in body
+
+
+# ---- files that already carry conditions ------------------------------------
+
+
+def test_a_file_counts_every_condition_it_stores() -> None:
+    file = UploadedFile.from_payload(
+        {
+            "accessConditions": [
+                {"name": "embargo", "startDate": "2028-06-01T00:00:00Z"},
+                {"name": "administrator"},
+            ]
+        }
+    )
+
+    assert file.condition == "embargo"
+    assert file.condition_count == 2
+
+
+@pytest.fixture
+def with_stacked_conditions(fake_dspace):
+    """Two conditions on one file -- DSpace's own UI can stack them; this
+    picker cannot, and must not silently unstack them either."""
+    fake_dspace.workspaceitems["42"] = make_workspaceitem(
+        "42",
+        files=[
+            upload_file(
+                "thesis.pdf",
+                conditions=[
+                    {"name": "embargo", "startDate": "2028-06-01T00:00:00Z"},
+                    {"name": "administrator"},
+                ],
+            )
+        ],
+    )
+    return fake_dspace
+
+
+def test_an_untouched_deposit_leaves_a_stacked_file_alone(
+    with_stacked_conditions, with_collection
+) -> None:
+    """The form posts the pre-selected stored condition straight back; sending
+    it as an operation would *set* the file's policies and silently delete the
+    second condition."""
+    post(
+        with_collection,
+        "/review/42/deposit",
+        [*COMPLETE, (CHOICE, "embargo"), (DATE, "2028-06-01")],
+    )
+
+    operations = [op for patch in with_stacked_conditions.patches for op in patch]
+    assert not any("accessConditions" in op["path"] for op in operations)
+
+
+def test_the_picker_says_when_a_choice_replaces_several(
+    with_stacked_conditions, with_collection
+) -> None:
+    body = with_collection.get("/review/42").text
+
+    assert "choosing here replaces them all" in body
+
+
+def test_a_stored_condition_the_collection_no_longer_offers_still_renders(
+    fake_dspace, with_collection
+) -> None:
+    """Without its own <option>, the browser falls back to the default option
+    and merely submitting the form clears a condition nobody touched."""
+    fake_dspace.workspaceitems["42"] = make_workspaceitem(
+        "42", files=[upload_file("thesis.pdf", conditions=[{"name": "ouLegacy"}])]
+    )
+
+    body = with_collection.get("/review/42").text
+
+    assert 'value="ouLegacy" selected' in body

@@ -17,7 +17,7 @@ from typing import Any
 from scholardrop.dspace import DSpaceError
 from scholardrop.dspace.models import WorkspaceItem
 from scholardrop.submission.definition import load_form_configs, load_sections
-from scholardrop.submission.form import UPLOAD_SECTION, UploadedFile
+from scholardrop.submission.form import UploadedFile
 from scholardrop.submission.readiness import Readiness, assess, labels_from
 from scholardrop.timestamps import format_timestamp
 
@@ -60,16 +60,24 @@ def filenames(sections: dict[str, Any]) -> list[str]:
     key**: the filename is `dc.title` in the bitstream's own metadata. Reading
     `entry["name"]` finds nothing and never says so, which is how every draft
     with a file attached was listed as "no file attached".
+
+    Found by shape, not by the section id: a definition may call its upload
+    step anything (the access-condition patch path learned this first), and this
+    function only has the item's section *data* -- no definition to ask. Any
+    section carrying a `files` list is an upload section, and a definition with
+    two of them contributes both.
     """
-    upload = sections.get(UPLOAD_SECTION)
-    files = (upload or {}).get("files") if isinstance(upload, dict) else None
     names = []
-    for entry in files or []:
-        if not isinstance(entry, dict):
+    for data in sections.values():
+        files = data.get("files") if isinstance(data, dict) else None
+        if not isinstance(files, list):
             continue
-        name = UploadedFile.from_payload(entry).name
-        if name:
-            names.append(name)
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            name = UploadedFile.from_payload(entry).name
+            if name:
+                names.append(name)
     return names
 
 

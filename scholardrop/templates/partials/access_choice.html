@@ -22,10 +22,23 @@
           hx-swap="innerHTML"
           {% if row.error %}aria-invalid="true" aria-describedby="access-error-{{ row.index }}"{% endif %}>
     <option value="">— the collection's default —</option>
+    {# A stored condition the collection no longer offers still renders, and
+       selected: otherwise the browser falls back to the default option, and
+       merely submitting the form would clear a condition nobody touched. #}
+    {% if row.chosen_name and not row.selected %}
+    <option value="{{ row.chosen_name }}" selected>{{ row.chosen_label }}</option>
+    {% endif %}
     {% for option in row.options %}
     <option value="{{ option.name }}"{% if option.name == row.chosen_name %} selected{% endif %}>{{ option.label }}</option>
     {% endfor %}
   </select>
+
+  {% if row.stored_count > 1 %}
+  {# DSpace's own UI can stack several conditions on one file; this picker holds
+     one, and a choice here *sets* -- said out loud, or the deposit deletes the
+     others silently. Leaving the picker as it stands changes nothing. #}
+  <span class="quiet">This file carries {{ row.stored_count }} access conditions; choosing here replaces them all.</span>
+  {% endif %}
 
   {# Where the date box lands. Rendered server-side for the condition this file
      already carries, so a resumed draft arrives complete rather than blank. #}
