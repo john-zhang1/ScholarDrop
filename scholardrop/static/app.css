@@ -32,10 +32,22 @@ main {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
   font-weight: 700;
   font-size: 1.1rem;
   color: var(--accent);
   text-decoration: none;
+}
+
+/* Centred rather than baseline-aligned, which also leaves the wordmark as the
+   only item carrying a baseline -- so the header still lines the brand up with
+   the tagline beside it instead of hanging it off the bottom of the mark. */
+.brand-mark {
+  align-self: center;
+  width: 1.6rem;
+  height: 1.6rem;
 }
 
 .tagline, .instance-url, .site-footer { color: var(--muted); font-size: 0.875rem; }
