@@ -2,7 +2,12 @@
 ;
 ;   sudo useradd --system --home-dir /srv/scholardrop --shell /sbin/nologin scholardrop
 ;   sudo install -o scholardrop -g scholardrop -m 0750 -d /srv/scholardrop/uploads
+;   sudo install -o scholardrop -g scholardrop -m 0750 -d /var/lib/scholardrop
 ;   sudo install -o root -g scholardrop -m 0640 .env /etc/scholardrop.env
+;
+; Point the two SQLite paths at /var/lib/scholardrop in that env file
+; (SCHOLARDROP_SUBMISSIONS_LOG_PATH, SCHOLARDROP_DEDUP_CHECKSUM_INDEX_PATH).
+; Both default to <checkout>/var/, which ProtectSystem=strict makes read-only.
 ;   sudo cp deploy/scholardrop.service /etc/systemd/system/
 ;   sudo systemctl daemon-reload && sudo systemctl enable --now scholardrop
 ;
@@ -49,7 +54,13 @@ ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-ReadWritePaths=/srv/scholardrop/uploads
+; Uploads, plus the state directory. ProtectSystem=strict makes everything else
+; read-only, so anything the app writes must be listed here or it fails at the
+; filesystem: the submissions log (SCHOLARDROP_SUBMISSIONS_LOG_PATH) reports
+; itself unavailable and silently stops recording deposits. The dedup index is
+; opened read-only and does not need this -- the harvest timer writes it.
+;   sudo install -o scholardrop -g scholardrop -m 0750 -d /var/lib/scholardrop
+ReadWritePaths=/srv/scholardrop/uploads /var/lib/scholardrop
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 LockPersonality=yes
