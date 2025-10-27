@@ -13,11 +13,10 @@ import pytest
 from scholardrop.dspace import DSpaceUnavailable
 from scholardrop.dspace.models import ItemStatus
 from scholardrop.history.log import Deposit, open_log
+from tests.conftest import SHIPPED_INSTANCE_KEY, shipped_base_url
 from tests.fakes import make_collection, make_workspaceitem, metadata_values
 
 COMPLETE = {"license_granted": "true", "traditionalpageone::dc.title": "A Logged Thesis"}
-
-BASE = "https://test.shareok.org/server"
 
 
 @pytest.fixture
@@ -26,8 +25,8 @@ def logged(app):
 
     def _record(**overrides: object) -> Deposit:
         fields: dict = {
-            "base_url": BASE,
-            "instance_key": "shareok",
+            "base_url": shipped_base_url(app),
+            "instance_key": SHIPPED_INSTANCE_KEY,
             "eperson_uuid": "eperson-1",
             "wsi_id": "42",
             "item_uuid": "item-1",
@@ -267,7 +266,7 @@ def test_a_deposit_is_logged(with_collection, fake_dspace, app) -> None:
     with_collection.post("/review/42/deposit", data=COMPLETE)
 
     with open_log(app.state.settings.submissions_log_path) as history:
-        rows = history.for_person(base_url=BASE, eperson_uuid="eperson-1")
+        rows = history.for_person(base_url=shipped_base_url(app), eperson_uuid="eperson-1")
     assert len(rows) == 1
     assert rows[0].wsi_id == "42"
     assert rows[0].title == "A Logged Thesis"

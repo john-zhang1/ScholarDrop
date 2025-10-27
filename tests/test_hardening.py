@@ -19,6 +19,7 @@ from scholardrop.submission.storage import (
     session_upload_dir,
     sweep_uploads,
 )
+from tests.conftest import LOGIN_PATH
 
 HTMX = {"HX-Request": "true"}
 
@@ -185,7 +186,7 @@ def test_the_access_line_names_the_user_not_the_session(signed_in, app, caplog) 
 
 def test_credentials_never_reach_the_log(web, caplog) -> None:
     with caplog.at_level(logging.DEBUG):
-        web.post("/login/shareok", data={"user": "jane@example.edu", "password": "hunter2"})
+        web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "hunter2"})
 
     assert "hunter2" not in caplog.text
     assert "jwt-from-login" not in caplog.text
@@ -241,7 +242,7 @@ def test_a_request_with_no_origin_at_all_is_allowed(signed_in) -> None:
 
 
 def test_the_session_cookie_is_httponly_and_samesite(web) -> None:
-    response = web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
 
     cookie = response.headers["set-cookie"]
     assert "HttpOnly" in cookie
@@ -286,7 +287,7 @@ def test_signing_out_is_not_undone_by_the_refresh(signed_in, app) -> None:
 
 def test_an_expired_session_is_not_refreshed(web, app) -> None:
     """A cookie whose session is gone gets nothing -- no silent resurrection."""
-    web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
     for session_id in list(app.state.sessions._sessions):
         app.state.sessions.delete(session_id)
 

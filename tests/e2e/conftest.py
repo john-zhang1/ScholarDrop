@@ -27,6 +27,8 @@ from typing import Any
 
 import pytest
 
+from tests.conftest import LOGIN_PATH
+
 # The system browsers, in preference order. headless_shell is the smaller one and
 # is what the DSpace work on this VM already uses.
 CHROMIUM_PATHS = (
@@ -109,7 +111,7 @@ def page(browser, live_app, request):
 @pytest.fixture
 def signed_in_page(page, live_app, fake_dspace):
     """Signed in through the real form, so the cookie is the real cookie."""
-    page.goto(f"{live_app}/login/shareok")
+    page.goto(f"{live_app}{LOGIN_PATH}")
     page.fill("input[name=user]", "jane@example.edu")
     page.fill("input[name=password]", "pw")
     page.click("form.stack button[type=submit]")

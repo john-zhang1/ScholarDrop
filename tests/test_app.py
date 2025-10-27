@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from scholardrop.app import create_app
 from scholardrop.config import ConfigError
 from scholardrop.settings import load_settings
+from tests.conftest import SHIPPED_INSTANCE_KEY
 
 
 @pytest.fixture
@@ -30,8 +31,11 @@ def test_index_lists_configured_instances(client: TestClient) -> None:
     assert "SHAREOK" in body
     # From the loaded registry, like /healthz: repointing an instance at a test
     # host is a config change, not a broken landing page.
-    assert client.app.state.registry.instances["shareok"].base_url in body
-    assert "/login/shareok" in body
+    assert client.app.state.registry.instances[SHIPPED_INSTANCE_KEY].base_url in body
+    # The key as the template writes it, which is not LOGIN_PATH: index.html
+    # interpolates `instance.key` into the href raw, so a key containing spaces
+    # reaches the browser unencoded and is escaped by the browser, not by us.
+    assert f"/login/{SHIPPED_INSTANCE_KEY}" in body
 
 
 def test_healthz_reports_loaded_config(client: TestClient) -> None:
@@ -43,7 +47,7 @@ def test_healthz_reports_loaded_config(client: TestClient) -> None:
     # must not fail this test.
     expected = sorted(client.app.state.registry.instances)
     assert response.json() == {"status": "ok", "instances": expected, "sessions": 0}
-    assert "shareok" in expected
+    assert SHIPPED_INSTANCE_KEY in expected
 
 
 def test_static_assets_are_served(client: TestClient) -> None:

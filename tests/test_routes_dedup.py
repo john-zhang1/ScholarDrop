@@ -12,6 +12,7 @@ import hashlib
 from scholardrop.dedup.index import IndexedBitstream
 from scholardrop.dspace import Collection, DSpaceNotFound, DSpaceUnavailable
 from scholardrop.dspace.models import Item
+from tests.conftest import LOGIN_PATH, SHIPPED_INSTANCE_KEY
 from tests.fakes import make_workspaceitem, metadata_values
 
 HTMX = {"HX-Request": "true"}
@@ -455,17 +456,17 @@ def test_each_instance_reads_its_own_index(
     others got silence — no warning, no error, nothing to notice."""
     from tests.fakes import make_collection
 
-    # Harvested for `local` only; the session below signs in to `shareok`.
+    # Harvested for `local` only; the session below signs in to the shipped instance.
     checksum_index(indexed(pdf_bytes), instance_key="local")
 
-    web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
     fake_dspace.collections_by_uuid["c1"] = make_collection("c1", "OU - Dissertations")
     web.get("/select/c1?verified=1")
     assert "already has this exact file" not in upload(web, pdf_bytes).text
 
-    # Now harvest for `shareok` too. Both indexes exist side by side, and this
+    # Now harvest for that one too. Both indexes exist side by side, and this
     # instance finds its own.
-    checksum_index(indexed(pdf_bytes), instance_key="shareok")
+    checksum_index(indexed(pdf_bytes), instance_key=SHIPPED_INSTANCE_KEY)
     assert "already has this exact file" in upload(web, pdf_bytes).text
 
 
@@ -477,7 +478,7 @@ def test_an_instance_can_point_at_its_own_index_file(
     from scholardrop.dedup.index import ChecksumIndex
 
     elsewhere = tmp_path / "elsewhere" / "sk.sqlite"
-    instance = app.state.registry.instance("shareok")
+    instance = app.state.registry.instance(SHIPPED_INSTANCE_KEY)
     with ChecksumIndex.create(elsewhere, base_url=instance.base_url) as index:
         index.upsert([indexed(pdf_bytes)])
     instance.dedup_checksum_index_path = str(elsewhere)

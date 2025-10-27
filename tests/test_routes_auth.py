@@ -5,14 +5,17 @@ from __future__ import annotations
 import pytest
 
 from scholardrop.dspace import DSpaceAuthError, DSpaceUnavailable
+from tests.conftest import LOGIN_PATH, SHIPPED_INSTANCE_KEY
 from tests.fakes import page_of
 
 
-def test_login_form_names_the_instance(web) -> None:
-    response = web.get("/login/shareok")
+def test_login_form_names_the_instance(web, app) -> None:
+    response = web.get(LOGIN_PATH)
 
     assert response.status_code == 200
-    assert "SHAREOK" in response.text
+    # The registry's display name, not a literal: what is being tested is that the
+    # form names whichever instance you are signing in to.
+    assert app.state.registry.instance(SHIPPED_INSTANCE_KEY).name in response.text
     assert 'name="user"' in response.text
     assert 'type="password"' in response.text
 
@@ -25,7 +28,7 @@ def test_login_form_unknown_instance_is_404(web) -> None:
 
 
 def test_successful_login_sets_session_and_redirects(web, app, fake_dspace) -> None:
-    response = web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
 
     assert response.status_code == 303
     assert response.headers["location"] == "/browse"
@@ -34,14 +37,14 @@ def test_successful_login_sets_session_and_redirects(web, app, fake_dspace) -> N
 
     assert len(app.state.sessions) == 1
     session = next(iter(app.state.sessions._sessions.values()))
-    assert session.instance_key == "shareok"
+    assert session.instance_key == SHIPPED_INSTANCE_KEY
     assert session.jwt == "jwt-from-login"
     assert session.xsrf_token == "xsrf-from-login"
     assert session.eperson_name == "Jane Doe"
 
 
 def test_session_cookie_is_signed_httponly_and_lax(web, app) -> None:
-    response = web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
 
     set_cookie = response.headers["set-cookie"]
     assert "HttpOnly" in set_cookie
@@ -51,19 +54,19 @@ def test_session_cookie_is_signed_httponly_and_lax(web, app) -> None:
     assert session_id not in set_cookie
 
 
-def test_signed_in_banner_shows_display_name(signed_in) -> None:
+def test_signed_in_banner_shows_display_name(signed_in, app) -> None:
     response = signed_in.get("/browse")
 
     assert response.status_code == 200
     assert "Jane Doe" in response.text
-    assert "SHAREOK" in response.text
+    assert app.state.registry.instance(SHIPPED_INSTANCE_KEY).name in response.text
     assert "Sign out" in response.text
 
 
 def test_bad_credentials_render_inline_error(web, app, fake_dspace) -> None:
     fake_dspace.login_ok = False
 
-    response = web.post("/login/shareok", data={"user": "jane@example.edu", "password": "wrong"})
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "wrong"})
 
     assert response.status_code == 401
     assert "not accepted" in response.text
@@ -74,7 +77,7 @@ def test_bad_credentials_render_inline_error(web, app, fake_dspace) -> None:
 
 
 def test_missing_fields_do_not_reach_dspace(web, fake_dspace) -> None:
-    response = web.post("/login/shareok", data={"user": "", "password": ""})
+    response = web.post(LOGIN_PATH, data={"user": "", "password": ""})
 
     assert response.status_code == 400
     assert not fake_dspace.called("login")
@@ -83,7 +86,7 @@ def test_missing_fields_do_not_reach_dspace(web, fake_dspace) -> None:
 def test_unreachable_repository_says_so(web, fake_dspace) -> None:
     fake_dspace.login_error = DSpaceUnavailable("connection refused")
 
-    response = web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
 
     assert response.status_code == 502
     assert "could not be reached" in response.text
@@ -92,7 +95,7 @@ def test_unreachable_repository_says_so(web, fake_dspace) -> None:
 def test_login_that_does_not_authenticate_is_rejected(web, app, fake_dspace) -> None:
     fake_dspace.authenticated_after_login = False
 
-    response = web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
 
     assert response.status_code == 401
     assert len(app.state.sessions) == 0
@@ -106,9 +109,9 @@ def test_failed_attempts_are_rate_limited(web, app, fake_dspace) -> None:
     limit = app.state.settings.login_rate_limit_attempts
 
     for _ in range(limit):
-        assert web.post("/login/shareok", data={"user": "j", "password": "x"}).status_code == 401
+        assert web.post(LOGIN_PATH, data={"user": "j", "password": "x"}).status_code == 401
 
-    blocked = web.post("/login/shareok", data={"user": "j", "password": "x"})
+    blocked = web.post(LOGIN_PATH, data={"user": "j", "password": "x"})
 
     assert blocked.status_code == 429
     assert "Too many failed sign-in attempts" in blocked.text
@@ -117,10 +120,10 @@ def test_failed_attempts_are_rate_limited(web, app, fake_dspace) -> None:
 def test_rate_limit_does_not_call_dspace(web, app, fake_dspace) -> None:
     fake_dspace.login_ok = False
     for _ in range(app.state.settings.login_rate_limit_attempts):
-        web.post("/login/shareok", data={"user": "j", "password": "x"})
+        web.post(LOGIN_PATH, data={"user": "j", "password": "x"})
     fake_dspace.calls.clear()
 
-    web.post("/login/shareok", data={"user": "j", "password": "x"})
+    web.post(LOGIN_PATH, data={"user": "j", "password": "x"})
 
     assert not fake_dspace.called("login")
 
@@ -128,13 +131,13 @@ def test_rate_limit_does_not_call_dspace(web, app, fake_dspace) -> None:
 def test_successful_login_resets_the_limiter(web, app, fake_dspace) -> None:
     fake_dspace.login_ok = False
     for _ in range(app.state.settings.login_rate_limit_attempts - 1):
-        web.post("/login/shareok", data={"user": "j", "password": "x"})
+        web.post(LOGIN_PATH, data={"user": "j", "password": "x"})
 
     fake_dspace.login_ok = True
-    assert web.post("/login/shareok", data={"user": "j", "password": "pw"}).status_code == 303
+    assert web.post(LOGIN_PATH, data={"user": "j", "password": "pw"}).status_code == 303
 
     fake_dspace.login_ok = False
-    assert web.post("/login/shareok", data={"user": "j", "password": "x"}).status_code == 401
+    assert web.post(LOGIN_PATH, data={"user": "j", "password": "x"}).status_code == 401
 
 
 # ---- session lifecycle -----------------------------------------------------
@@ -218,7 +221,7 @@ def test_a_failed_sign_in_closes_its_client(web, fake_dspace) -> None:
     return without closing the client and leak its connection pool."""
     fake_dspace.login_ok = False
 
-    response = web.post("/login/shareok", data={"user": "j", "password": "wrong"})
+    response = web.post(LOGIN_PATH, data={"user": "j", "password": "wrong"})
 
     assert response.status_code == 401
     assert fake_dspace.closed, "the client was left open"
@@ -229,7 +232,7 @@ def test_an_unreachable_repository_closes_its_client(web, fake_dspace) -> None:
 
     fake_dspace.login_error = DSpaceUnavailable("connection refused", path="/authn/login")
 
-    response = web.post("/login/shareok", data={"user": "j", "password": "pw"})
+    response = web.post(LOGIN_PATH, data={"user": "j", "password": "pw"})
 
     assert response.status_code == 502
     assert fake_dspace.closed, "the client was left open"
@@ -238,9 +241,9 @@ def test_an_unreachable_repository_closes_its_client(web, fake_dspace) -> None:
 def test_repeated_failures_are_rate_limited(web, app, fake_dspace) -> None:
     fake_dspace.login_ok = False
     for _ in range(app.state.settings.login_rate_limit_attempts):
-        web.post("/login/shareok", data={"user": "j", "password": "x"})
+        web.post(LOGIN_PATH, data={"user": "j", "password": "x"})
 
-    blocked = web.post("/login/shareok", data={"user": "j", "password": "x"})
+    blocked = web.post(LOGIN_PATH, data={"user": "j", "password": "x"})
 
     assert blocked.status_code == 429
 
@@ -258,10 +261,10 @@ def test_a_forged_forwarded_for_does_not_reset_the_rate_limit(
     """
     fake_dspace.login_ok = False
     for _ in range(app.state.settings.login_rate_limit_attempts):
-        web.post("/login/shareok", data={"user": "j", "password": "x"})
+        web.post(LOGIN_PATH, data={"user": "j", "password": "x"})
 
     still_blocked = web.post(
-        "/login/shareok",
+        LOGIN_PATH,
         data={"user": "j", "password": "x"},
         headers={"X-Forwarded-For": header},
     )

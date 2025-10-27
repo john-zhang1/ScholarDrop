@@ -9,12 +9,13 @@ import pytest
 from scholardrop.config import MappingProfile, load_registry
 from scholardrop.extract.mapper import map_metadata
 from scholardrop.extract.models import ExtractedMetadata, SourceTier, items, text
+from tests.conftest import SHIPPED_INSTANCE_KEY
 
 
 @pytest.fixture
 def profile(shipped_config_dir: Path) -> MappingProfile:
     registry = load_registry(shipped_config_dir)
-    return registry.profile_for(registry.instances["shareok"])
+    return registry.profile_for(registry.instances[SHIPPED_INSTANCE_KEY])
 
 
 @pytest.fixture

@@ -14,6 +14,8 @@ import hashlib
 
 import pytest
 
+from tests.conftest import SHIPPED_INSTANCE_KEY
+
 pytestmark = pytest.mark.e2e
 
 
@@ -31,8 +33,8 @@ def already_deposited(app, pdf_bytes):
     from scholardrop.dedup.index import ChecksumIndex, IndexedBitstream, index_path_for
 
     with ChecksumIndex.create(
-        index_path_for(app.state.settings.dedup_checksum_index_path, "shareok"),
-        base_url=app.state.registry.instance("shareok").base_url,
+        index_path_for(app.state.settings.dedup_checksum_index_path, SHIPPED_INSTANCE_KEY),
+        base_url=app.state.registry.instance(SHIPPED_INSTANCE_KEY).base_url,
     ) as index:
         index.upsert(
             [

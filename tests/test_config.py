@@ -11,19 +11,21 @@ from scholardrop.config import (
     load_mapping_profile,
     load_registry,
 )
-from tests.conftest import VALID_INSTANCES, VALID_PROFILE
+from tests.conftest import SHIPPED_INSTANCE_KEY, VALID_INSTANCES, VALID_PROFILE
 
 
 def test_loads_shipped_config(shipped_config_dir: Path) -> None:
     registry = load_registry(shipped_config_dir)
 
-    assert "shareok" in registry.instances
-    shareok = registry.instances["shareok"]
-    assert shareok.name == "SHAREOK"
-    assert shareok.key == "shareok"
-    # Not pinned to today's values: which tier SHAREOK is configured for, and
-    # which host it points at, are operational choices that change without this
-    # being a regression. What must hold is that they parse and compose.
+    assert SHIPPED_INSTANCE_KEY in registry.instances
+    shareok = registry.instances[SHIPPED_INSTANCE_KEY]
+    assert shareok.key == SHIPPED_INSTANCE_KEY
+    # Not pinned to today's values: the display name, which tier SHAREOK is
+    # configured for, and which host it points at are operational choices that
+    # change without this being a regression -- the key moved from `shareok` to
+    # `shareok 7.3 Test` once already. What must hold is that they parse and
+    # compose, and that the profile still resolves.
+    assert shareok.name
     assert shareok.extraction in {"cloud", "local", "heuristic"}
     assert shareok.api_url == f"{shareok.base_url}/api"
 

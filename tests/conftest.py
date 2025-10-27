@@ -2,10 +2,43 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The instance in the *shipped* config that route tests sign in to. The `app`
+# fixture loads `config/` rather than a fixture file -- deliberately, so the
+# config a deployment actually runs is the one the suite exercises -- which means
+# renaming an instance there breaks every test that logs in. Naming the key once
+# is what keeps that a one-line fix instead of a sweep through fifty call sites.
+#
+# Its base_url is `https://test.shareok.org/server`, which is what
+# tests/test_routes_submissions.py's BASE has to stay equal to: the submissions
+# log filters on base_url *and* instance_key, so both halves have to match the
+# session a test signed in with.
+SHIPPED_INSTANCE_KEY = "shareok 7.3 Test"
+
+# Any key in the shipped config works here *except* `local`, which
+# tests/test_routes_dedup.py uses as the deliberately-different second instance
+# when proving that one repository's checksum index is never read for another.
+
+# Pre-encoded, because the shipped keys contain spaces. httpx leaves existing
+# percent-escapes alone, and Playwright needs a valid URL rather than one the
+# browser would have to guess at.
+LOGIN_PATH = f"/login/{quote(SHIPPED_INSTANCE_KEY)}"
+
+
+def shipped_base_url(app) -> str:
+    """The base_url a test's signed-in session will actually carry.
+
+    Read from the registry rather than copied, because the submissions log filters
+    on base_url *and* eperson_uuid: a hardcoded copy keeps passing right up until
+    the shipped config repoints that instance at another host, and then every row
+    a test writes stops matching the session that wrote it.
+    """
+    return app.state.registry.instance(SHIPPED_INSTANCE_KEY).base_url
 
 
 def pytest_addoption(parser) -> None:
@@ -139,7 +172,11 @@ def checksum_index(app):
     """
     from scholardrop.dedup.index import ChecksumIndex, IndexedBitstream, index_path_for
 
-    def _build(*rows: IndexedBitstream, instance_key: str = "shareok", base_url: str | None = None):
+    def _build(
+        *rows: IndexedBitstream,
+        instance_key: str = SHIPPED_INSTANCE_KEY,
+        base_url: str | None = None,
+    ):
         # Written where *that instance* will look for it, and stamped with its
         # base_url -- an index harvested from anywhere else is deliberately refused.
         instance = app.state.registry.instance(instance_key)
@@ -172,7 +209,7 @@ def signed_in(app, web, fake_dspace):
     Goes through the real POST /login so the cookie, session contents, and
     write-back all match production rather than being hand-assembled.
     """
-    response = web.post("/login/shareok", data={"user": "jane@example.edu", "password": "pw"})
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
     assert response.status_code == 303, response.text
     fake_dspace.calls.clear()
     return web

@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.e2e
+from tests.conftest import SHIPPED_INSTANCE_KEY, shipped_base_url
 
-BASE = "https://test.shareok.org/server"
+pytestmark = pytest.mark.e2e
 
 
 def given_deposit(app, **overrides: object) -> None:
     from scholardrop.history.log import Deposit, open_log
 
     fields: dict = {
-        "base_url": BASE,
-        "instance_key": "shareok",
+        "base_url": shipped_base_url(app),
+        "instance_key": SHIPPED_INSTANCE_KEY,
         "eperson_uuid": "eperson-1",
         "wsi_id": "42",
         "item_uuid": "item-1",

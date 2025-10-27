@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.conftest import SHIPPED_INSTANCE_KEY
+
 pytestmark = pytest.mark.e2e
 
 
@@ -57,7 +59,7 @@ def test_the_restricted_content_checkbox_reaches_the_server(
     signed_in_page, live_app, app, fake_dspace, fake_extractor, pdf_file
 ) -> None:
     """Phase 3b's promise, from the browser end: the tick must survive the post."""
-    app.state.registry.instances["shareok"].extraction = "cloud"
+    app.state.registry.instances[SHIPPED_INSTANCE_KEY].extraction = "cloud"
     page = signed_in_page
     choose_collection(page, live_app, fake_dspace)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from scholardrop.dspace import DSpaceForbidden, DSpaceUnavailable
+from tests.conftest import SHIPPED_INSTANCE_KEY
 
 HTMX = {"HX-Request": "true"}
 
@@ -75,7 +76,7 @@ def test_upload_starts_extraction_with_the_stored_file(
     assert len(fake_extractor.calls) == 1
     path, kwargs = fake_extractor.calls[0]
     assert path.read_bytes() == pdf_bytes
-    assert kwargs["instance"].key == "shareok"
+    assert kwargs["instance"].key == SHIPPED_INSTANCE_KEY
     assert kwargs["profile"].name == "shareok-etd"
 
 
@@ -210,7 +211,7 @@ def test_a_failing_extractor_does_not_fail_the_upload(
 
 def cloud_instance(app):
     """Put the session's instance on the cloud tier, where the choice matters."""
-    app.state.registry.instances["shareok"].extraction = "cloud"
+    app.state.registry.instances[SHIPPED_INSTANCE_KEY].extraction = "cloud"
 
 
 def test_the_restricted_checkbox_is_offered_on_a_cloud_instance(with_collection, app) -> None:
@@ -224,7 +225,7 @@ def test_the_restricted_checkbox_is_offered_on_a_cloud_instance(with_collection,
 
 def test_no_checkbox_where_the_document_never_leaves_anyway(with_collection, app) -> None:
     """Offering the choice on a heuristic instance would be theatre."""
-    app.state.registry.instances["shareok"].extraction = "heuristic"
+    app.state.registry.instances[SHIPPED_INSTANCE_KEY].extraction = "heuristic"
 
     response = with_collection.get("/submit")
 
