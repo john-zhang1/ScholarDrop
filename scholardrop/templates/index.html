@@ -16,7 +16,10 @@
       <h2>{{ instance.name }}</h2>
       <p class="instance-url">{{ instance.base_url }}</p>
     </div>
-    <a class="button" href="/login/{{ instance.key }}">Sign in</a>
+    {# urlencode, because an instance key is free-form YAML: the shipped ones
+       carry spaces, and a `?` or `#` in one would otherwise be parsed as the
+       start of a query or a fragment rather than as part of the key. #}
+    <a class="button" href="/login/{{ instance.key | urlencode }}">Sign in</a>
   </li>
   {% endfor %}
 </ul>

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from scholardrop.app import create_app
 from scholardrop.config import ConfigError
 from scholardrop.settings import load_settings
-from tests.conftest import SHIPPED_INSTANCE_KEY
+from tests.conftest import LOGIN_PATH, SHIPPED_INSTANCE_KEY
 
 
 @pytest.fixture
@@ -32,10 +32,29 @@ def test_index_lists_configured_instances(client: TestClient) -> None:
     # From the loaded registry, like /healthz: repointing an instance at a test
     # host is a config change, not a broken landing page.
     assert client.app.state.registry.instances[SHIPPED_INSTANCE_KEY].base_url in body
-    # The key as the template writes it, which is not LOGIN_PATH: index.html
-    # interpolates `instance.key` into the href raw, so a key containing spaces
-    # reaches the browser unencoded and is escaped by the browser, not by us.
-    assert f"/login/{SHIPPED_INSTANCE_KEY}" in body
+    # Percent-encoded, not raw: the shipped keys carry spaces, and a href with a
+    # literal space in it is not a URL. See test_the_rendered_sign_in_link_works.
+    assert LOGIN_PATH in body
+    assert f"/login/{SHIPPED_INSTANCE_KEY}" not in body
+
+
+def test_the_rendered_sign_in_link_works(client: TestClient) -> None:
+    """Every href the landing page offers has to be a URL you can follow.
+
+    Asserting on the markup alone missed this: an instance key is free-form
+    YAML, and the shipped ones carry spaces, so the template used to emit
+    `href="/login/shareok 7.3 Test"`. Browsers escape that on navigation and the
+    flow appeared to work -- until a key held a `?` or a `#`, which a browser
+    reads as the start of a query or a fragment and drops from the path.
+    """
+    import re
+
+    hrefs = re.findall(r'href="(/login/[^"]*)"', client.get("/").text)
+
+    assert hrefs, "the landing page offered no sign-in links at all"
+    for href in hrefs:
+        assert " " not in href
+        assert client.get(href).status_code == 200, href
 
 
 def test_healthz_reports_loaded_config(client: TestClient) -> None:
