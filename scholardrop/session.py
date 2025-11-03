@@ -30,6 +30,11 @@ class Session:
     created_at: float
     last_seen: float
     instance_key: str | None = None
+    # This session's idle timeout, when its repository sets one of its own
+    # (`session_ttl_seconds` in instances.yaml). None means "use the store's",
+    # so changing the global setting still moves every session that did not ask
+    # for something different.
+    ttl_seconds: int | None = None
     # Set once the user authenticates. Never leaves the process (DESIGN.md §8).
     jwt: str | None = None
     xsrf_token: str | None = None
@@ -71,8 +76,13 @@ class Session:
             return {}
         return submissions.pop(str(workspaceitem_id), {})
 
+    def effective_ttl(self, default: int) -> int:
+        """This session's idle timeout: its repository's, or the given default."""
+        return default if self.ttl_seconds is None else self.ttl_seconds
+
     def expires_at(self, ttl_seconds: int) -> float:
-        return self.last_seen + ttl_seconds
+        """When this session goes idle. The argument is the *fallback*."""
+        return self.last_seen + self.effective_ttl(ttl_seconds)
 
     def is_expired(self, ttl_seconds: int, now: float | None = None) -> bool:
         return (now if now is not None else time.monotonic()) >= self.expires_at(ttl_seconds)
@@ -83,6 +93,9 @@ class SessionStore(ABC):
 
     `ttl_seconds` is an *idle* timeout: get() refreshes last_seen, so an active
     user is never logged out mid-flow, and an abandoned tab expires on schedule.
+    It is also only the **default**: a session whose repository sets its own
+    `session_ttl_seconds` carries that instead (`Session.effective_ttl`), so one
+    store serves instances whose DSpace JWTs expire at different times.
     """
 
     def __init__(self, ttl_seconds: int) -> None:
@@ -203,13 +216,14 @@ class SlidingSessionMiddleware(BaseHTTPMiddleware):
             return response
         # touch=False: the route has already refreshed last_seen if it looked at the
         # session. This must not keep a session alive on static-asset traffic alone.
-        if state.sessions.get(session_id, touch=False) is None:
+        session = state.sessions.get(session_id, touch=False)
+        if session is None:
             return response
 
         response.set_cookie(
             cookie.name,
             cookie.dumps(session_id),
-            max_age=state.settings.session_ttl_seconds,
+            max_age=session.effective_ttl(state.settings.session_ttl_seconds),
             httponly=True,
             secure=cookie.secure,
             samesite="lax",

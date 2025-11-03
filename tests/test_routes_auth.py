@@ -54,6 +54,30 @@ def test_session_cookie_is_signed_httponly_and_lax(web, app) -> None:
     assert session_id not in set_cookie
 
 
+def test_the_session_takes_its_repositorys_ttl(web, app) -> None:
+    """An institution whose DSpace JWT expires sooner gets a session that does too."""
+    app.state.registry.instances[SHIPPED_INSTANCE_KEY].session_ttl_seconds = 300
+
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
+
+    assert response.status_code == 303
+    session = next(iter(app.state.sessions._sessions.values()))
+    assert session.ttl_seconds == 300
+    assert "Max-Age=300" in response.headers["set-cookie"]
+
+
+def test_a_repository_with_no_opinion_leaves_the_global_ttl_in_charge(web, app) -> None:
+    """The override is stored, not the resolved value: raising the global setting
+    later has to move the sessions that never asked for anything different."""
+    assert app.state.registry.instances[SHIPPED_INSTANCE_KEY].session_ttl_seconds is None
+
+    response = web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
+
+    session = next(iter(app.state.sessions._sessions.values()))
+    assert session.ttl_seconds is None
+    assert f"Max-Age={app.state.settings.session_ttl_seconds}" in response.headers["set-cookie"]
+
+
 def test_signed_in_banner_shows_display_name(signed_in, app) -> None:
     response = signed_in.get("/browse")
 

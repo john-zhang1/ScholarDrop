@@ -35,6 +35,60 @@ def test_loads_shipped_config(shipped_config_dir: Path) -> None:
     assert profile.metadata_field("degree") is None
 
 
+# ---- per-repository session TTL and upload cap ------------------------------
+
+
+def test_an_instance_can_set_its_own_ttl_and_cap(write_config) -> None:
+    registry = load_registry(
+        write_config(
+            """
+instances:
+  strict:
+    name: Strict U
+    base_url: https://strict.edu/server
+    mapping_profile: shareok-etd
+    session_ttl_seconds: 300
+    upload_max_bytes: 20971520
+""",
+            {"shareok-etd": VALID_PROFILE},
+        )
+    )
+    strict = registry.instances["strict"]
+
+    assert strict.session_ttl(1800) == 300
+    assert strict.upload_cap(104857600) == 20971520
+
+
+def test_an_instance_with_no_opinion_takes_the_global_values(write_config) -> None:
+    registry = load_registry(write_config(VALID_INSTANCES, {"shareok-etd": VALID_PROFILE}))
+    shareok = registry.instances["shareok"]
+
+    assert shareok.session_ttl_seconds is None and shareok.upload_max_bytes is None
+    assert shareok.session_ttl(1800) == 1800
+    assert shareok.upload_cap(104857600) == 104857600
+
+
+@pytest.mark.parametrize("field", ["session_ttl_seconds", "upload_max_bytes"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_a_nonsense_ttl_or_cap_fails_at_startup(write_config, field: str, value: int) -> None:
+    """Zero is a session that expires before the redirect, or a cap no file meets.
+    Config errors belong at startup, naming the file -- never at the first upload."""
+    with pytest.raises(ConfigError):
+        load_registry(
+            write_config(
+                f"""
+instances:
+  broken:
+    name: Broken
+    base_url: https://broken.edu/server
+    mapping_profile: shareok-etd
+    {field}: {value}
+""",
+                {"shareok-etd": VALID_PROFILE},
+            )
+        )
+
+
 def test_trailing_slash_stripped_from_base_url(write_config) -> None:
     registry = load_registry(write_config(VALID_INSTANCES, {"shareok-etd": VALID_PROFILE}))
     assert registry.instances["shareok"].base_url == "https://shareok.org/server"

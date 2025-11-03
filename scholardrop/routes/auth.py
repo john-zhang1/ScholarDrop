@@ -85,6 +85,10 @@ async def login_submit(
         eperson = status.eperson
         session = sessions.create(
             instance_key=instance.key,
+            # The override, not the resolved value: leaving it None where the
+            # repository has no opinion keeps the global setting authoritative,
+            # so raising it later moves existing sessions too.
+            ttl_seconds=instance.session_ttl_seconds,
             jwt=client.bearer_token,
             xsrf_token=client.xsrf_token,
             eperson_name=eperson.display_name if eperson else None,
@@ -93,7 +97,12 @@ async def login_submit(
         log.info("signed in %s at %s", session.eperson_name, instance.key)
 
         response = RedirectResponse("/browse", status_code=303)
-        _set_session_cookie(request, response, session.id)
+        _set_session_cookie(
+            request,
+            response,
+            session.id,
+            ttl=session.effective_ttl(request.app.state.settings.session_ttl_seconds),
+        )
         return response
     finally:
         await client.aclose()
@@ -126,13 +135,12 @@ async def logout(request: Request) -> Response:
     return response
 
 
-def _set_session_cookie(request: Request, response: Response, session_id: str) -> None:
-    settings = request.app.state.settings
+def _set_session_cookie(request: Request, response: Response, session_id: str, *, ttl: int) -> None:
     cookie = request.app.state.cookie
     response.set_cookie(
         cookie.name,
         cookie.dumps(session_id),
-        max_age=settings.session_ttl_seconds,
+        max_age=ttl,
         httponly=True,
         secure=cookie.secure,
         samesite="lax",

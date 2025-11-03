@@ -100,6 +100,40 @@ class Instance(BaseModel):
     # written into that key would be a dangling reference in an index the whole
     # repository browses by.
     orcid_mode: str = "display_only"
+    # Idle session timeout for *this* repository, overriding
+    # SCHOLARDROP_SESSION_TTL_SECONDS. The global default matches DSpace's own
+    # default JWT lifetime (`jwt.login.token.expiration`, 1 800 000 ms), but that
+    # is a per-deployment setting: an institution that shortens its JWT leaves our
+    # session carrying a dead token, and one that lengthens it signs people out
+    # earlier than it needs to. Set this to whatever that repository's JWT
+    # lifetime actually is.
+    session_ttl_seconds: int | None = None
+    # Largest PDF this repository accepts, overriding
+    # SCHOLARDROP_UPLOAD_MAX_BYTES. Institutions disagree about this, and it is
+    # not only a policy number: the deposit holds the file twice while it is in
+    # flight (once read off disk, once as the multipart body), so raising it
+    # raises the process's peak memory by twice the difference. Keep the edge's
+    # own limit -- nginx `client_max_body_size`, or the ALB's -- at or above the
+    # largest value any instance sets, or that repository's uploads are refused
+    # before ScholarDrop can explain why.
+    upload_max_bytes: int | None = None
+
+    @field_validator("session_ttl_seconds", "upload_max_bytes")
+    @classmethod
+    def _positive(cls, v: int | None) -> int | None:
+        # Zero would be a session that expires before the redirect, or a cap no
+        # file can meet -- a typo, not a policy.
+        if v is not None and v < 1:
+            raise ValueError("must be a positive number of seconds/bytes")
+        return v
+
+    def session_ttl(self, default: int) -> int:
+        """This repository's idle session timeout, falling back to the global one."""
+        return default if self.session_ttl_seconds is None else self.session_ttl_seconds
+
+    def upload_cap(self, default: int) -> int:
+        """This repository's maximum upload size, falling back to the global one."""
+        return default if self.upload_max_bytes is None else self.upload_max_bytes
 
     @field_validator("orcid_mode")
     @classmethod

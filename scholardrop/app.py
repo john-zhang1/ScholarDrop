@@ -332,6 +332,11 @@ async def _sweep(app: FastAPI) -> None:
     """
     settings: Settings = app.state.settings
     sessions: SessionStore = app.state.sessions
+    registry: Registry = app.state.registry
+    longest_session_ttl = max(
+        [settings.session_ttl_seconds]
+        + [i.session_ttl(settings.session_ttl_seconds) for i in registry.instances.values()]
+    )
     while True:
         await asyncio.sleep(settings.session_sweep_interval_seconds)
         try:
@@ -342,7 +347,11 @@ async def _sweep(app: FastAPI) -> None:
             # still live rather than going on age, or a user who took longer than the
             # TTL to open the review form would lose their pre-fill with no notice.
             app.state.extractions.sweep(
-                settings.session_ttl_seconds,
+                # The *longest* TTL any instance configures. This argument is only
+                # the fallback for jobs whose owner cannot be resolved, and sweeping
+                # one repository's results on another's shorter clock is the same
+                # silent un-prefill the liveness check exists to prevent.
+                longest_session_ttl,
                 owner_is_live=lambda owner: sessions.get(owner, touch=False) is not None,
             )
             # Expired repository configuration. Reads drop stale entries anyway;

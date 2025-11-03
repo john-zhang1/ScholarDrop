@@ -66,7 +66,9 @@ async def submit(request: Request) -> Response:
         collection_uuid=session.collection_uuid,
         collection_name=session.data.get("collection_name"),
         collection_handle=session.data.get("collection_handle"),
-        max_bytes=request.app.state.settings.upload_max_bytes,
+        max_bytes=session_instance(request, session).upload_cap(
+            request.app.state.settings.upload_max_bytes
+        ),
         offer_restricted=offers_restricted(request),
         offer_identifier=request.app.state.settings.identifiers_enabled,
     )
@@ -133,7 +135,8 @@ async def upload(
             stored = await store_upload(
                 file,
                 directory=session_upload_dir(settings.upload_dir, session),
-                max_bytes=settings.upload_max_bytes,
+                # This repository's cap, which the page the file came from quoted.
+                max_bytes=session_instance(request, session).upload_cap(settings.upload_max_bytes),
             )
         except UploadRejected as exc:
             return rejected(exc.message, status=413 if "larger than" in exc.message else 400)

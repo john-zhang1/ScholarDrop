@@ -19,7 +19,7 @@ from scholardrop.submission.storage import (
     session_upload_dir,
     sweep_uploads,
 )
-from tests.conftest import LOGIN_PATH
+from tests.conftest import LOGIN_PATH, SHIPPED_INSTANCE_KEY
 
 HTMX = {"HX-Request": "true"}
 
@@ -273,6 +273,19 @@ def test_an_active_session_keeps_its_cookie_alive(signed_in, app) -> None:
     assert cookie is not None, "an authenticated request must re-issue the cookie"
     assert f"Max-Age={app.state.settings.session_ttl_seconds}" in cookie
     assert "HttpOnly" in cookie
+
+
+def test_the_refresh_slides_by_the_repositorys_own_ttl(web, app) -> None:
+    """The sliding cookie reads the session's TTL, not the global setting -- or a
+    stricter institution's users get a cookie outliving their session."""
+    app.state.registry.instances[SHIPPED_INSTANCE_KEY].session_ttl_seconds = 300
+    web.post(LOGIN_PATH, data={"user": "jane@example.edu", "password": "pw"})
+
+    cookie = web.get("/browse").headers.get("set-cookie")
+
+    assert cookie is not None
+    assert "Max-Age=300" in cookie
+    assert f"Max-Age={app.state.settings.session_ttl_seconds}" not in cookie
 
 
 def test_signing_out_is_not_undone_by_the_refresh(signed_in, app) -> None:

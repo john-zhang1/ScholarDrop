@@ -156,3 +156,68 @@ def test_reading_an_unknown_draft_does_not_grow_the_session(store) -> None:
     assert session.submission("no-such-draft") == {}
     assert session.forget_submission("no-such-draft") == {}
     assert session.data.get("submissions", {}) == {}
+
+
+# ---- per-repository idle timeouts -------------------------------------------
+#
+# One store serves every institution, and their DSpace JWTs do not all expire at
+# the same time (DEPLOY-AWS.md, "More than one repository"). A session carries its
+# repository's TTL when that repository sets one; the store's value is the default
+# for everyone else.
+
+
+def test_a_session_without_its_own_ttl_uses_the_stores(store, clock: FakeClock) -> None:
+    session = store.create()
+
+    assert session.ttl_seconds is None
+    assert session.effective_ttl(60) == 60
+
+    clock.advance(60)
+    assert store.get(session.id) is None
+
+
+def test_a_shorter_repository_ttl_expires_the_session_early(store, clock: FakeClock) -> None:
+    """An institution whose JWT dies at 10s must not leave us holding it for 60."""
+    session = store.create(instance_key="short", ttl_seconds=10)
+
+    clock.advance(9)
+    assert store.get(session.id, touch=False) is not None
+
+    clock.advance(1)
+    assert store.get(session.id) is None
+    assert len(store) == 0
+
+
+def test_a_longer_repository_ttl_outlives_the_stores(store, clock: FakeClock) -> None:
+    session = store.create(instance_key="long", ttl_seconds=600)
+
+    clock.advance(120)  # twice the store's default, and still live
+    assert store.get(session.id, touch=False) is not None
+
+    clock.advance(480)
+    assert store.get(session.id, touch=False) is None
+
+
+def test_the_sweep_uses_each_sessions_own_ttl(store, clock: FakeClock) -> None:
+    """The sweep is a loop over one store; it must not apply one clock to all."""
+    short = store.create(instance_key="short", ttl_seconds=10)
+    default = store.create()
+    long = store.create(instance_key="long", ttl_seconds=600)
+
+    clock.advance(30)
+    assert store.sweep() == 1
+    assert store.get(short.id, touch=False) is None
+    assert store.get(default.id, touch=False) is not None
+    assert store.get(long.id, touch=False) is not None
+
+
+def test_the_repository_ttl_is_still_an_idle_timeout(store, clock: FakeClock) -> None:
+    """An override changes the length of the window, never its idle-ness."""
+    session = store.create(instance_key="short", ttl_seconds=10)
+
+    for _ in range(5):
+        clock.advance(9)
+        assert store.get(session.id) is not None, "an active user is never signed out"
+
+    clock.advance(10)
+    assert store.get(session.id) is None

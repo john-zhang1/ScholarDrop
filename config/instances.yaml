@@ -4,10 +4,20 @@
 # profile under config/mappings/ if its metadata field names differ.
 #
 # base_url is the DSpace *server* root -- ScholarDrop appends /api itself.
+#
+# Two settings are global by default and overridable here, because institutions
+# disagree about them (docs/DEPLOY-AWS.md, "More than one repository"):
+#
+#   session_ttl_seconds  this repository's idle session timeout. Set it to that
+#                        DSpace's own jwt.login.token.expiration; ours is only
+#                        right for a repository that kept the 30-minute default.
+#   upload_max_bytes     the largest PDF this repository accepts. The edge's own
+#                        limit (nginx client_max_body_size, or the ALB's) must be
+#                        at or above the largest any instance sets.
 
 instances:
-  shareok:
-    name: SHAREOK
+  shareok 7.3 Test:
+    name: SHAREOK 7.3 Test
     base_url: https://test.shareok.org/server
     mapping_profile: shareok-etd
     # Shown on the access-denied screen so a user knows who to ask (DESIGN.md §4).
@@ -18,9 +28,20 @@ instances:
     # "restricted content" checkbox, which forces the local model.
     extraction: heuristic
 
-  DSpace 9.2:
-    name: DSpace 9.2
+  DSpace 9.2 Test:
+    name: SHAREOK Test
     base_url: https://ds7up.dev.shareok.org/server
+    mapping_profile: shareok-etd
+    contact_email: shareok@ou.edu
+    # Heuristic here: tier 2 costs no API calls and skips the cold grammar
+    # compile. Switch to cloud (or local, see docs/local-llm.md) to exercise
+    # tier 1 against this instance.
+    extraction: heuristic
+
+
+  DSpace 9.2 Prod:
+    name: SHAREOK Prod
+    base_url: https://shareok.org/server
     mapping_profile: shareok-etd
     contact_email: shareok@ou.edu
     # Heuristic here: tier 2 costs no API calls and skips the cold grammar

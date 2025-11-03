@@ -116,6 +116,41 @@ def test_an_oversized_file_is_refused(with_collection, app, fake_dspace) -> None
     assert not fake_dspace.called("create_workspaceitem")
 
 
+# ---- per-repository upload caps ---------------------------------------------
+
+
+def test_a_repositorys_own_cap_is_what_the_page_quotes(with_collection, app) -> None:
+    """The number on the page is the number that will be enforced, per instance."""
+    app.state.registry.instances[SHIPPED_INSTANCE_KEY].upload_max_bytes = 20 * 1024 * 1024
+
+    body = with_collection.get("/submit").text
+
+    assert "up to 20 MB" in body
+
+
+def test_a_repositorys_own_cap_is_what_gets_enforced(with_collection, app, fake_dspace) -> None:
+    """A file the global setting would accept, refused because this repository is
+    stricter -- and refused at the same 413 with the same wording."""
+    app.state.settings.upload_max_bytes = 10 * 1024 * 1024
+    app.state.registry.instances[SHIPPED_INSTANCE_KEY].upload_max_bytes = 32
+
+    response = upload(with_collection, b"%PDF-1.7" + b"x" * 500)
+
+    assert response.status_code == 413
+    assert "larger than" in response.text
+    assert not fake_dspace.called("create_workspaceitem")
+
+
+def test_a_repository_without_a_cap_falls_back_to_the_global_one(
+    with_collection, app, fake_dspace
+) -> None:
+    instance = app.state.registry.instances[SHIPPED_INSTANCE_KEY]
+    assert instance.upload_max_bytes is None
+    app.state.settings.upload_max_bytes = 32
+
+    assert upload(with_collection, b"%PDF-1.7" + b"x" * 500).status_code == 413
+
+
 def test_no_file_and_no_identifier_is_a_message_not_a_crash(with_collection) -> None:
     """Either input will do, but not neither (DESIGN.md §13.1)."""
     response = with_collection.post("/submit", headers=HTMX)
